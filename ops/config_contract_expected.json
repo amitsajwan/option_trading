@@ -1,5 +1,6 @@
 {
   "_comment": "Config contract \u00e2\u20ac\u201d checked by ops/check_config_contract.py after every deploy and at 09:00 IST. Update this file IN THE SAME COMMIT as any intentional config change; a mismatch is a deploy blocker. Born 2026-07-07 after the NIFTY-giveback wiring gap (flag enabled in .env.compose but the NIFTY compose service never passed the var \u00e2\u20ac\u201d silent no-op for weeks).",
+  "_sensex_note": "2026-08-07 onboarding: strategy_app_sensex/execution_app_sensex/seller_app_sensex entries are deliberately NOT in `services` yet -- those containers don't exist (cold start, Phase 5/6/7 pending, see docs/ONBOARDING_INSTRUMENT.md). The checker's main loop iterates every key under `services` and tries `docker exec <key> printenv`, so adding them now would make this UNREACHABLE-fail permanently at the 09:00 IST daily run for containers that were never meant to be running. Add the 3 entries back to `services` in the SAME commit that actually starts each container, matching how FINNIFTY's entries were added at its Stage 3 paper launch, not at registry time.",
   "services": {
     "option_trading-strategy_app-1": {
       "instrument": "BANKNIFTY",
@@ -60,26 +61,6 @@
         "RISK_MAX_LOTS_PER_TRADE": "1",
         "DEPTH_FEED_ENABLED": "1",
         "STRATEGY_PROFILE_ID": "trader_master_live_v1"
-      },
-      "require_nonempty": [
-        "EXIT_STRATEGY_MODE",
-        "EXIT_MAX_LOSS_PCT"
-      ]
-    },
-    "option_trading-strategy_app_sensex-1": {
-      "instrument": "SENSEX",
-      "_comment": "PLACEHOLDER (2026-08-07 onboarding, Phase 3 wiring): no SENSEX entry model exists yet -- ENTRY_ML_MODEL_PATH/ENTRY_ML_MIN_PROB are cold-start defaults, not yet an empirically-computed threshold. Update in the SAME commit as Phase 6 training lands. Container is not brought up until then.",
-      "expect": {
-        "ENTRY_ML_MODEL_PATH": "/app/models/sensex_entry_015pct_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.60",
-        "ENTRY_ML_MAX_NAN_FEATURES": "2",
-        "SENSEX_LOT_SIZE": "20",
-        "ML_ENTRY_DIRECTION_MODE": "composite",
-        "ENTRY_DIR_W_ML": "0",
-        "RISK_LIVE_MIN_GRADE": "GOOD",
-        "RISK_MAX_LOTS_PER_TRADE": "1",
-        "DEPTH_FEED_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_ml_entry_v1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -176,37 +157,6 @@
         "SELLER_MAX_HOLD_DAYS": "5",
         "SELLER_CONDOR_OFFSET": "100",
         "SELLER_SPREAD_WIDTH": "150"
-      },
-      "require_nonempty": [
-        "DHAN_CLIENT_ID",
-        "DHAN_ACCESS_TOKEN",
-        "SELLER_IV_RANK_MIN",
-        "SELLER_MIN_FREE_MARGIN_RS"
-      ]
-    },
-    "option_trading-execution_app_sensex-1": {
-      "instrument": "SENSEX",
-      "_comment": "2026-08-07 onboarding launch state: paper. First BSE instrument -- flip EXECUTION_ADAPTER's expect to 'dhan' in the SAME commit that sets SENSEX_EXECUTION_ADAPTER=dhan in .env.compose at go-live (buyer-side first, per user decision).",
-      "expect": {
-        "EXECUTION_ADAPTER": "paper",
-        "EXECUTION_REQUIRE_LIVE_TIER": "1",
-        "SENSEX_LOT_SIZE": "20"
-      },
-      "require_nonempty": [
-        "DHAN_CLIENT_ID",
-        "DHAN_ACCESS_TOKEN"
-      ]
-    },
-    "option_trading-seller_app_sensex-1": {
-      "instrument": "SENSEX",
-      "_comment": "2026-08-07 onboarding launch state: paper/disabled. SENSEX launches buyer-side first (user decision) -- seller stays off until buyer is confirmed stable, then flip both expects to 'dhan'/'1' in the SAME commit as .env.compose.",
-      "expect": {
-        "EXECUTION_ADAPTER": "paper",
-        "SELLER_LIVE_ENABLED": "0",
-        "SELLER_MAX_CONCURRENT": "1",
-        "SELLER_MAX_HOLD_DAYS": "5",
-        "SELLER_CONDOR_OFFSET": "200",
-        "SELLER_SPREAD_WIDTH": "300"
       },
       "require_nonempty": [
         "DHAN_CLIENT_ID",

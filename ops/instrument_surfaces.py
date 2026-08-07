@@ -209,6 +209,22 @@ EXCHANGE_SEGMENT_ALLOWLIST: dict[str, str] = {
 _SEGMENT_LITERALS = {"NSE_FNO", "BSE_FNO"}
 
 
+# Instruments deliberately registered ahead of their strategy_app/
+# execution_app/seller_app containers existing (cold start: registry+compose
+# wired, but no trained model yet, so those containers are never started).
+# config_contract_expected.json intentionally does NOT list them yet --
+# check_config_contract.py's main loop does `docker exec <every service key>
+# printenv` unconditionally, so listing a not-yet-running container would
+# make it UNREACHABLE-fail permanently at the 09:00 IST daily run, not just
+# during onboarding. Remove an instrument from here in the SAME commit that
+# adds its 3 real config_contract_expected.json entries (i.e. the commit that
+# actually starts those containers) -- this is not a permanent exemption.
+CONFIG_CONTRACT_DEFERRED: dict[str, str] = {
+    "SENSEX": "2026-08-07 onboarding, cold start -- no trained entry model yet, "
+              "strategy_app_sensex/execution_app_sensex/seller_app_sensex not started",
+}
+
+
 def exchange_segment_scan_file(path: Path) -> list[str]:
     """Return violations: a bare exchange-segment string literal in code
     (not a docstring, not an except-handler fallback) outside the allowlist."""
@@ -345,8 +361,12 @@ def surface_checks(instrument: str) -> list[tuple[str, bool, str]]:
                        f"option_trading-execution_app{sfx}-1",
                        f"option_trading-seller_app{sfx}-1"}
     missing_contract = sorted(needed_contract - services)
-    add("config_contract_expected.json", not missing_contract,
-        f"add service blocks: {missing_contract}" if missing_contract else "")
+    if inst in CONFIG_CONTRACT_DEFERRED:
+        add("config_contract_expected.json", True,
+            f"deferred: {CONFIG_CONTRACT_DEFERRED[inst]}")
+    else:
+        add("config_contract_expected.json", not missing_contract,
+            f"add service blocks: {missing_contract}" if missing_contract else "")
 
     # 11. monitoring is generic -- assert the generic loop markers exist so a
     # revert to hardcoded lists fails loudly for EVERY instrument.
