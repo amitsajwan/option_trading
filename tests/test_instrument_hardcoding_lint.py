@@ -22,11 +22,13 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from contracts_app.instruments import INSTRUMENTS, known_instruments
+from contracts_app.instruments import FNO_SEGMENT_WS_CODE, INSTRUMENTS, known_instruments, get_instrument
 from ops.instrument_surfaces import (
     AST_ALLOWLIST,
+    EXCHANGE_SEGMENT_ALLOWLIST,
     REPO,
     ast_scan_repo,
+    exchange_segment_scan_repo,
     surface_problems,
 )
 
@@ -47,6 +49,43 @@ class TestNoNewHardcodedInstrumentLogic(unittest.TestCase):
         # A stale allowlist silently widens the exemption surface.
         stale = [rel for rel in AST_ALLOWLIST if not (REPO / rel).exists()]
         self.assertEqual(stale, [], f"AST_ALLOWLIST paths no longer exist: {stale}")
+
+
+class TestExchangeSegmentIsRegistryDerived(unittest.TestCase):
+    """Born 2026-08-07 onboarding SENSEX (BSE) -- the first non-NSE
+    instrument. InstrumentSpec.fno_segment existed the whole time but was
+    dead in the live path (order placement, historical/quote fetch, WS
+    subscription all hardcoded "NSE_FNO"). Closes that gap category for
+    whatever exchange instrument #5 lands on."""
+
+    def test_exchange_segment_is_registry_derived(self) -> None:
+        violations = exchange_segment_scan_repo()
+        self.assertEqual(
+            violations, [],
+            "\n\nBare exchange-segment string literal found outside the registry. "
+            "Derive from contracts_app.get_instrument(name).fno_segment instead "
+            "(or add a deliberate exemption to "
+            "ops/instrument_surfaces.EXCHANGE_SEGMENT_ALLOWLIST with a reason):\n  "
+            + "\n  ".join(violations),
+        )
+
+    def test_exchange_segment_allowlist_entries_still_exist(self) -> None:
+        stale = [rel for rel in EXCHANGE_SEGMENT_ALLOWLIST if not (REPO / rel).exists()]
+        self.assertEqual(stale, [], f"EXCHANGE_SEGMENT_ALLOWLIST paths no longer exist: {stale}")
+
+    def test_ws_segment_codes_cover_every_registered_fno_segment(self) -> None:
+        # If instrument #5 lands on a third exchange without a numeric
+        # ws-feed code registered, it must fail CI here -- not silently
+        # inherit NSE's code (2) via dhan_ws_feed.py's fno_segment_ws_code().
+        missing = sorted(
+            {get_instrument(name).fno_segment for name in known_instruments()}
+            - set(FNO_SEGMENT_WS_CODE)
+        )
+        self.assertEqual(
+            missing, [],
+            f"fno_segment(s) {missing} have no numeric WS code in "
+            "contracts_app.instruments.FNO_SEGMENT_WS_CODE",
+        )
 
 
 class TestEveryInstrumentHasItsFullSurface(unittest.TestCase):

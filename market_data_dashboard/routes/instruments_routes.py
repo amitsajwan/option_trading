@@ -173,45 +173,29 @@ def _latest_regime(db: Any, instrument: str, today: str) -> Optional[str]:
 def _next_expiry(instrument: str, today_dt: datetime) -> Optional[str]:
     """Calculate next expiry date for the instrument.
 
-    NIFTY: next Thursday (weekly).
-    BANKNIFTY: last Thursday of current month (monthly post-Nov-2024).
-    Returns ISO date string or None on error.
+    Instrument-keyed via the same expiry functions hist_backfill.py uses
+    (fixed 2026-08-07 for SENSEX) -- this used to hardcode Thursday for every
+    "weekly" cadence instrument unconditionally, already wrong for NIFTY
+    since its Sep-2025 Thu->Tue cutover, and would have been wrong for
+    SENSEX too if it had happened to fall on a different weekday (it
+    doesn't, confirmed live: SENSEX is Thursday-always -- but that's
+    coincidence, not something this function should independently assume).
+    Returns (expiry_iso, dte) or (None, None) on error.
     """
     try:
-        from datetime import date
+        from market_data_dashboard.services.hist_backfill import (
+            bn_monthly_expiry, nifty_weekly_expiry, sensex_expiry,
+        )
         today = today_dt.date()
-        cadence = _EXPIRY_CADENCE.get(instrument, "weekly")
-
-        if cadence == "weekly":
-            # Next Thursday (weekday=3)
-            days_ahead = (3 - today.weekday()) % 7
-            if days_ahead == 0:
-                days_ahead = 7  # today is Thursday → use next Thursday
-            expiry = today + timedelta(days=days_ahead)
-        else:
-            # Monthly: last Thursday of current month
-            import calendar
-            year, month = today.year, today.month
-            # Find last Thursday in month
-            last_day = calendar.monthrange(year, month)[1]
-            last_thu = None
-            for d in range(last_day, 0, -1):
-                if date(year, month, d).weekday() == 3:
-                    last_thu = date(year, month, d)
-                    break
-            if last_thu is None or last_thu < today:
-                # Move to next month
-                if month == 12:
-                    year, month = year + 1, 1
-                else:
-                    month += 1
-                last_day = calendar.monthrange(year, month)[1]
-                for d in range(last_day, 0, -1):
-                    if date(year, month, d).weekday() == 3:
-                        last_thu = date(year, month, d)
-                        break
-            expiry = last_thu
-
+        expiry_fn = {
+            "BANKNIFTY": bn_monthly_expiry,
+            "NIFTY": nifty_weekly_expiry,
+            "FINNIFTY": bn_monthly_expiry,
+            "SENSEX": sensex_expiry,
+        }.get(instrument.strip().upper())
+        if expiry_fn is None:
+            return None, None
+        expiry = expiry_fn(today)
         dte = (expiry - today).days
         return expiry.isoformat(), dte
     except Exception:

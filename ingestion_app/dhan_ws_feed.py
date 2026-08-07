@@ -70,9 +70,9 @@ _TICK_KEY   = "websocket:tick:{instrument}:latest"
 _HB_KEY     = "dhan:ws:feed:heartbeat"
 _HB_TTL_S   = 15          # seconds; if heartbeat older than this, feed is stale
 
-# Dhan segment constants (MarketFeed.IDX_I / NSE_FNO numeric codes)
+# Dhan segment constants (MarketFeed.IDX_I numeric code — shared across
+# exchanges, unlike the FNO segment which is exchange-specific).
 _SEG_IDX    = 0            # IDX_I (index segment)
-_SEG_FNO    = 2            # NSE_FNO
 
 _SID_VIX    = "21"
 
@@ -87,6 +87,7 @@ _FUTURES_LABEL_ENV = {
     "BANKNIFTY": "INSTRUMENT_SYMBOL",
     "NIFTY": "NIFTY_INSTRUMENT_SYMBOL",
     "FINNIFTY": "FINNIFTY_INSTRUMENT_SYMBOL",
+    "SENSEX": "SENSEX_INSTRUMENT_SYMBOL",
 }
 
 
@@ -106,6 +107,7 @@ def build_shared_legs(scrip_master: Any) -> List[Dict[str, Any]]:
     nearest-expiry futures security id.
     """
     from contracts_app import get_instrument, known_instruments
+    from contracts_app.instruments import fno_segment_ws_code
 
     legs: List[Dict[str, Any]] = [
         {"segment": _SEG_IDX, "security_id": _SID_VIX, "mode": _MODE_TICKER, "label": "INDIAVIX"},
@@ -122,7 +124,11 @@ def build_shared_legs(scrip_master: Any) -> List[Dict[str, Any]]:
         fut_label = str(os.getenv(env_name) or "").strip().upper() if env_name else ""
         if fut_sid and fut_label:
             legs.append({
-                "segment": _SEG_FNO, "security_id": fut_sid,
+                # Registry-derived (fixed 2026-08-07 for SENSEX/BSE): this
+                # used to be a flat _SEG_FNO=2 (NSE_FNO's numeric code)
+                # applied to every instrument's futures leg regardless of
+                # exchange. BSE_FNO's numeric code is 8, not 2.
+                "segment": fno_segment_ws_code(name), "security_id": fut_sid,
                 "mode": _MODE_QUOTE, "label": fut_label,
             })
         else:

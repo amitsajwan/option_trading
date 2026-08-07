@@ -234,19 +234,35 @@ def _normalize_instrument_symbol(value: Any) -> str:
     return text
 
 
+# Kite-style exchange codes (this alias table predates the Dhan migration
+# and callers still expect NSE/NFO-shaped values), keyed by the registry's
+# plain-exchange string (contracts_app.instruments.FNO_SEGMENT_EXCHANGE).
+_KITE_EXCHANGE_CODE = {"NSE": "NSE", "BSE": "BSE"}
+_KITE_FNO_CODE = {"NSE": "NFO", "BSE": "BFO"}
+
+
 def _infer_exchange_for_symbol(symbol: str) -> Optional[str]:
     normalized = _normalize_instrument_symbol(symbol)
     if not normalized:
         return None
-    if normalized.endswith(("FUT", "CE", "PE")):
-        return "NFO"
     if normalized in {"INDIA VIX", "INDIAVIX", "NIFTY BANK", "NIFTY 50", "NIFTY FIN SERVICE"}:
         return "NSE"
     try:
-        from contracts_app import known_instruments
-        if normalized in known_instruments():
-            return "NSE"
+        from contracts_app import get_instrument, known_instruments
+        from contracts_app.instruments import FNO_SEGMENT_EXCHANGE
+        # Registry-derived (fixed 2026-08-07 for SENSEX/BSE): this used to
+        # map every FUT/CE/PE-suffixed symbol to "NFO" and every known
+        # instrument to "NSE" unconditionally -- correct while every
+        # instrument was NSE, wrong for a BSE symbol like "SENSEX-...-CE".
+        underlying = normalized.split("-", 1)[0] if "-" in normalized else normalized
+        if underlying in known_instruments():
+            exchange = FNO_SEGMENT_EXCHANGE.get(get_instrument(underlying).fno_segment, "NSE")
+            if normalized.endswith(("FUT", "CE", "PE")):
+                return _KITE_FNO_CODE.get(exchange, "NFO")
+            return _KITE_EXCHANGE_CODE.get(exchange, "NSE")
     except Exception:
+        if normalized.endswith(("FUT", "CE", "PE")):
+            return "NFO"
         if normalized in {"BANKNIFTY", "NIFTY", "FINNIFTY"}:
             return "NSE"
     return None

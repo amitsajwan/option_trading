@@ -45,7 +45,6 @@ from .base import BrokerAdapter, OrderResult
 logger = logging.getLogger(__name__)
 
 _SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
-_EXCHANGE_SEGMENT = "NSE_FNO"
 
 # Underlying this execution container trades — from STRATEGY_INSTRUMENT so a
 # NIFTY container filters the scrip master for NIFTY contracts. Defaults to the
@@ -55,6 +54,19 @@ try:
     _UNDERLYING = _current_instrument()
 except Exception:
     _UNDERLYING = "BANKNIFTY"
+
+# The order-placement exchangeSegment (e.g. "NSE_FNO"/"BSE_FNO") — registry-
+# derived, not hardcoded. Fixed 2026-08-07 for SENSEX (BSE): this used to be
+# a bare "NSE_FNO" module constant, which would have silently misrouted BSE
+# orders (Dhan would reject them, but only at order time, not before).
+try:
+    from contracts_app.instruments import get_instrument as _get_instrument
+    from contracts_app.instruments import FNO_SEGMENT_EXCHANGE as _FNO_SEGMENT_EXCHANGE
+    _EXCHANGE_SEGMENT = _get_instrument(_UNDERLYING).fno_segment
+    _EXPECTED_EXCHANGE = _FNO_SEGMENT_EXCHANGE.get(_EXCHANGE_SEGMENT, "NSE")
+except Exception:
+    _EXCHANGE_SEGMENT = "NSE_FNO"
+    _EXPECTED_EXCHANGE = "NSE"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +131,14 @@ class _ScripMaster:
                 # via a lot-size drift warning (scrip_master=60 registry=65, i.e. FINNIFTY's
                 # lot winning over NIFTY's). Dhan symbols are "{FAMILY}-{expiry}-{strike}-{CE|PE}".
                 if ((row.get("SEM_TRADING_SYMBOL") or "").upper().split("-", 1)[0]) != _UNDERLYING:
+                    continue
+                # Exchange guard (added 2026-08-07 for SENSEX/BSE, the first
+                # non-NSE instrument): the trading-symbol match above was
+                # exchange-agnostic by accident until now. SEM_EXM_EXCH_ID
+                # holds the plain exchange code ("NSE"/"BSE"), not the
+                # fno_segment string -- use FNO_SEGMENT_EXCHANGE, not
+                # fno_segment, for this comparison.
+                if (row.get("SEM_EXM_EXCH_ID") or "").upper() != _EXPECTED_EXCHANGE:
                     continue
                 opt = (row.get("SEM_OPTION_TYPE") or "").upper()
                 if opt not in ("CE", "PE"):

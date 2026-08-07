@@ -53,6 +53,10 @@ services:
       # Same reasoning as NIFTY_INSTRUMENT_SYMBOL above — the shared WS owner
       # needs FINNIFTY's futures symbol too, to build its leg (2026-08-03).
       FINNIFTY_INSTRUMENT_SYMBOL: "${FINNIFTY_INSTRUMENT_SYMBOL:-FINNIFTY26AUGFUT}"
+      # Same reasoning again for SENSEX (2026-08-07) -- also the first leg
+      # whose numeric WS segment code differs (BSE_FNO=8, not NSE_FNO=2); see
+      # contracts_app.instruments.fno_segment_ws_code() / dhan_ws_feed.py.
+      SENSEX_INSTRUMENT_SYMBOL: "${SENSEX_INSTRUMENT_SYMBOL:-SENSEX26AUGFUT}"
       KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       BROKER: "${BROKER:-kite}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
@@ -802,6 +806,55 @@ services:
       timeout: 5s
       retries: 3
 
+  execution_app_sensex:
+    image: option_trading-execution_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_sensex:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: SENSEX
+      # Own var, same reasoning as FINNIFTY_EXECUTION_ADAPTER above -- never
+      # reuse a shared unnamespaced switch for anything gating real money.
+      EXECUTION_ADAPTER: "${SENSEX_EXECUTION_ADAPTER:-paper}"
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
+      SENSEX_LOT_SIZE: "${SENSEX_LOT_SIZE:-20}"
+      ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
+      ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+      EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-0}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.15}"
+      FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
+      EXECUTION_FILLS_STREAM: "execution:sensex:fills:v1"
+      MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_sensex"
+      SHADOW_MAX_LOTS: "${SHADOW_MAX_LOTS:-1}"
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
+      TRADE_SIGNAL_TOPIC: "market:sensex:strategy:signals:v1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   depth_collector:
     # Live-only side-channel: polls Kite REST API for ATM CE/PE order book depth
     # and writes best-bid/ask to Redis for strategy_app to read as a live signal.
@@ -947,6 +1000,40 @@ services:
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DEPTH_UNDERLYING: "FINNIFTY"
       DEPTH_STRIKE_STEP: "${DEPTH_STRIKE_STEP_FINNIFTY:-50}"
+      DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
+      DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
+      DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
+      DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+      DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
+      DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+    command: ["python", "-m", "ingestion_app.collectors.dhan_depth_collector"]
+
+  depth_collector_dhan_sensex:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      EXECUTION_MODE: "live"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DEPTH_UNDERLYING: "SENSEX"
+      DEPTH_STRIKE_STEP: "${DEPTH_STRIKE_STEP_SENSEX:-100}"
       DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
       DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
       DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
@@ -1947,6 +2034,68 @@ services:
       timeout: 15s
       retries: 3
 
+  ingestion_app_sensex:
+    image: option_trading-ingestion_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: SENSEX
+      INSTRUMENT_SYMBOL: "${SENSEX_INSTRUMENT_SYMBOL:-SENSEX26AUGFUT}"
+      BROKER: dhan
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      INGESTION_COLLECTORS_ENABLED: "0"
+      LIVE_TOPIC: "market:sensex:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:sensex:snapshot:v1"
+    command:
+      - "python"
+      - "-m"
+      - "ingestion_app.market_session_runner"
+      - "--mode"
+      - "live"
+      - "--holidays-file"
+      - "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      - "--idle-sleep-seconds"
+      - "${IDLE_SLEEP_SECONDS:-60}"
+      - "--state-file"
+      - "/app/.run/ingestion_app_sensex/session_state.json"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "ingestion_app.market_session_runner"
+        - "--healthcheck"
+        - "--state-file"
+        - "/app/.run/ingestion_app_sensex/session_state.json"
+        - "--max-stale-seconds"
+        - "240"
+      interval: 60s
+      timeout: 15s
+      retries: 3
+
   snapshot_app_nifty:
     image: option_trading-snapshot_app
     restart: unless-stopped
@@ -2066,6 +2215,65 @@ services:
       timeout: 5s
       retries: 5
 
+  snapshot_app_sensex:
+    image: option_trading-snapshot_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ingestion_app_sensex:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: SENSEX
+      INSTRUMENT_SYMBOL: "${SENSEX_INSTRUMENT_SYMBOL:-SENSEX26AUGFUT}"
+      SENSEX_LOT_SIZE: "${SENSEX_LOT_SIZE:-20}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:sensex:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:sensex:snapshot:v1"
+      ML_PIPELINE_DISABLE_KITE_BACKFILL: "1"
+    command:
+      - "python"
+      - "-m"
+      - "snapshot_app.main_live"
+      - "--foreground"
+      - "--instrument"
+      - "${SENSEX_INSTRUMENT_SYMBOL:-SENSEX26AUGFUT}"
+      - "--market-api-base"
+      - "http://ingestion_app_sensex:8004"
+      - "--out-jsonl"
+      - "/app/.run/snapshot_app_sensex/events.jsonl"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "snapshot_app.health"
+        - "--events-path"
+        - "/app/.run/snapshot_app_sensex/events.jsonl"
+        - "--max-age-seconds"
+        - "300"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
   # 2026-07-08: NIFTY had NO live-snapshot Mongo persistence at all (only the
   # JSONL file below) — meaning NEITHER the official sim_orchestrator/Strategy
   # Eval UI replay (source_coll defaults to phase1_market_snapshots) NOR the
@@ -2177,6 +2385,67 @@ services:
         "market:finnifty:snapshot:v1",
         "--run-dir",
         ".run/persistence_app_finnifty",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  persistence_app_sensex:
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      snapshot_app_sensex:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: SENSEX
+      # Explicit (not auto-namespace-derived) -- same gotcha as NIFTY/FINNIFTY's
+      # blocks above: persistence_app.health reads MONGO_COLL_SNAPSHOTS directly
+      # with a hardcoded BN fallback, not via the instrument-aware resolver.
+      MONGO_COLL_SNAPSHOTS: "phase1_market_snapshots_sensex"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:sensex:snapshot:v1"
+      HISTORICAL_TOPIC: "market:sensex:snapshot:v1:historical"
+      SNAPSHOT_V1_TOPIC: "market:sensex:snapshot:v1"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_snapshot_consumer",
+        "--foreground",
+        "--event-topic",
+        "market:sensex:snapshot:v1",
+        "--run-dir",
+        ".run/persistence_app_sensex",
       ]
     volumes:
       - ./.run:/app/.run
@@ -2437,6 +2706,114 @@ services:
       timeout: 10s
       retries: 3
 
+  strategy_app_sensex:
+    image: option_trading-strategy_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      snapshot_app_sensex:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      STRATEGY_INSTRUMENT: SENSEX
+      STRATEGY_RUN_DIR: "/app/.run/strategy_app_sensex"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:sensex:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:sensex:snapshot:v1"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "1"
+      STRATEGY_VOTE_TOPIC: "market:sensex:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:sensex:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:sensex:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:sensex:strategy:decision_trace:v1"
+      # PLACEHOLDER -- no SENSEX entry model exists yet (Phase 6 of the
+      # onboarding plan, cold start, needs live-collected data first). This
+      # path deliberately does not exist yet: strategy_app_sensex must NOT be
+      # brought up until it does (fail loud on a missing model, not silently
+      # degrade). Do not point this at a sibling's model.
+      ENTRY_ML_MODEL_PATH: "${SENSEX_ENTRY_ML_MODEL_PATH:-/app/models/sensex_entry_015pct_v1.joblib}"
+      # PLACEHOLDER -- per onboarding doc lesson #7, never copy a sibling's
+      # threshold. Recompute empirically from this model's own probability
+      # distribution once Phase 6 trains it.
+      ENTRY_ML_MIN_PROB: "${SENSEX_ENTRY_ML_MIN_PROB:-0.60}"
+      # No SENSEX direction-ML bundle exists yet, same posture as FINNIFTY's
+      # block above: ENTRY_DIR_W_ML explicitly zeroed rather than left at its
+      # default with no model behind it. ML_ENTRY_DIRECTION_MODE=composite
+      # still runs its rule-based terms fully.
+      ENTRY_ML_MAX_NAN_FEATURES: "${SENSEX_ENTRY_ML_MAX_NAN_FEATURES:-2}"
+      ML_ENTRY_DIRECTION_MODE: "${SENSEX_ML_ENTRY_DIRECTION_MODE:-composite}"
+      ENTRY_DIR_W_ML: "${SENSEX_ENTRY_DIR_W_ML:-0}"
+      # Composite's depth signal needs depth_collector_dhan_sensex live from
+      # day one -- see NIFTY's 2026-07-21 silently-dead-depth-feed incident.
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED_SENSEX:-1}"
+      ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
+      SENSEX_LOT_SIZE: "${SENSEX_LOT_SIZE:-20}"
+      STRATEGY_MIN_CONFIDENCE: "0.05"
+      # GOOD (BankNifty's stricter bar, not NIFTY's OK) -- same extra safety
+      # margin as FINNIFTY's cold-start posture, until this model's real
+      # calibration quality is known.
+      RISK_LIVE_MIN_GRADE: "${SENSEX_RISK_LIVE_MIN_GRADE:-GOOD}"
+      RISK_MAX_LOTS_PER_TRADE: "1"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_SESSION_TRADES: "6"
+      RISK_MAX_CONSECUTIVE_LOSSES: "3"
+      ENTRY_TIERING_ENABLED: "true"
+      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
+      EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
+      EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
+      EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
+      EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
+      EXIT_GIVEBACK_PCT: "${EXIT_GIVEBACK_PCT:-0.09}"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+    command:
+      - "python"
+      - "-m"
+      - "strategy_app.main"
+      - "--engine"
+      - "deterministic"
+      - "--min-confidence"
+      - "0.05"
+      - "--strategy-profile-id"
+      - "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+      - "--topic"
+      - "market:sensex:snapshot:v1"
+      # Starts on "paper" (Stage 3 smoke test), same as FINNIFTY's launch --
+      # flip SENSEX_ROLLOUT_STAGE=capped_live only after Stage 4/5
+      # verification passes (config contract + Dhan sandbox order-path check).
+      - "--rollout-stage"
+      - "${SENSEX_ROLLOUT_STAGE:-paper}"
+      - "--position-size-multiplier"
+      - "${SENSEX_POSITION_SIZE_MULTIPLIER:-0.25}"
+    volumes:
+      - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+      - ./ops/strategy_config.yml:/app/ops/strategy_config.yml:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "strategy_app.health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
   strategy_persistence_app_nifty:
     image: option_trading-strategy_persistence_app
     restart: unless-stopped
@@ -2536,6 +2913,60 @@ services:
       - "market:finnifty:strategy:positions:v1"
       - "--trace-topic"
       - "market:finnifty:strategy:decision_trace:v1"
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "persistence_app.strategy_health", "--max-age-seconds", "300"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  strategy_persistence_app_sensex:
+    image: option_trading-strategy_persistence_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_sensex:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: SENSEX
+      STRATEGY_VOTE_TOPIC: "market:sensex:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:sensex:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:sensex:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:sensex:strategy:decision_trace:v1"
+      MONGO_COLL_STRATEGY_VOTES: "strategy_votes_sensex"
+      MONGO_COLL_TRADE_SIGNALS: "trade_signals_sensex"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_sensex"
+      MONGO_COLL_STRATEGY_DECISION_TRACES: "strategy_decision_traces_sensex"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+    command:
+      - "python"
+      - "-m"
+      - "persistence_app.main_strategy_consumer"
+      - "--foreground"
+      - "--vote-topic"
+      - "market:sensex:strategy:votes:v1"
+      - "--signal-topic"
+      - "market:sensex:strategy:signals:v1"
+      - "--position-topic"
+      - "market:sensex:strategy:positions:v1"
+      - "--trace-topic"
+      - "market:sensex:strategy:decision_trace:v1"
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro

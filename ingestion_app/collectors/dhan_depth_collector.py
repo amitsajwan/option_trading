@@ -74,8 +74,8 @@ logger = logging.getLogger(__name__)
 
 _SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _DHAN_BASE = "https://api.dhan.co/v2"
-_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13", "FINNIFTY": "27"}
-_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50}
+_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13", "FINNIFTY": "27", "SENSEX": "51"}
+_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50, "SENSEX": 100}
 
 
 # ── Scrip master: (expiry, strike, CE/PE) -> security_id ───────────────────
@@ -118,10 +118,21 @@ class _ScripIndex:
             return
         index: Dict[Tuple[str, int, str], str] = {}
         reader = csv.DictReader(io.StringIO(self._raw_csv()))
+        from contracts_app.instruments import FNO_SEGMENT_EXCHANGE, get_instrument
+        expected_exchange = FNO_SEGMENT_EXCHANGE.get(get_instrument(self._underlying).fno_segment, "NSE")
         for row in reader:
             if (row.get("SEM_INSTRUMENT_NAME") or "") != "OPTIDX":
                 continue
-            if self._underlying not in (row.get("SEM_TRADING_SYMBOL") or "").upper():
+            # Exact leading-token match, NOT substring (fixed 2026-08-07):
+            # this used to be `self._underlying not in symbol`, which is
+            # exactly the collision shape already documented and fixed in
+            # execution_app/adapter/dhan.py's _ScripMaster ("NIFTY" is a
+            # substring of BANKNIFTY/FINNIFTY too) -- never ported here. Now
+            # acute for SENSEX: "SENSEX" is literally a substring of
+            # "SENSEX50-...", a different, unrelated index (lot 75 vs 20).
+            if ((row.get("SEM_TRADING_SYMBOL") or "").upper().split("-", 1)[0]) != self._underlying:
+                continue
+            if (row.get("SEM_EXM_EXCH_ID") or "").upper() != expected_exchange:
                 continue
             opt = (row.get("SEM_OPTION_TYPE") or "").upper()
             if opt not in ("CE", "PE"):
@@ -286,9 +297,11 @@ def _poll_once(
     else:
         ce_sid, pe_sid = cached_legs
 
+    from contracts_app.instruments import get_instrument
+    fno_seg = get_instrument(underlying).fno_segment
     legs = [
-        (f"{underlying}_ATM_CE", "NSE_FNO", ce_sid),
-        (f"{underlying}_ATM_PE", "NSE_FNO", pe_sid),
+        (f"{underlying}_ATM_CE", fno_seg, ce_sid),
+        (f"{underlying}_ATM_PE", fno_seg, pe_sid),
     ]
     try:
         quotes = quote_client.get_quotes(

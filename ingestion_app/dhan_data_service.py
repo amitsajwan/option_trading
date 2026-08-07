@@ -216,7 +216,7 @@ class DhanDataService:
         elif symbol_u.endswith("FUT") or "FUT" in symbol_u:
             # Current-expiry futures for the active instrument
             sid = self._futures_security_id()
-            securities = [{"exchangeSegment": "NSE_FNO", "securityId": sid, "instrument": "FUTIDX"}]
+            securities = [{"exchangeSegment": self._active_spec().fno_segment, "securityId": sid, "instrument": "FUTIDX"}]
         else:
             # Underlying index for the active instrument (BANKNIFTY=25, NIFTY=13)
             securities = [{"exchangeSegment": "IDX_I", "securityId": self._active_spec().index_security_id, "instrument": "INDEX"}]
@@ -295,7 +295,7 @@ class DhanDataService:
             seg, sid, inst_type = "IDX_I", IDX_VIX, "INDEX"
         elif is_fut:
             sid = self._futures_security_id()
-            seg, inst_type = "NSE_FNO", "FUTIDX"
+            seg, inst_type = self._active_spec().fno_segment, "FUTIDX"
         else:
             seg, sid, inst_type = "IDX_I", self._active_spec().index_security_id, "INDEX"
 
@@ -375,7 +375,7 @@ class DhanDataService:
         configured = str(resolve_instrument_symbol() or "").strip().upper()
         out = []
         if configured and configured != "INSTRUMENT_NOT_SET":
-            out.append({"symbol": configured, "exchange": "NSE_FNO"})
+            out.append({"symbol": configured, "exchange": self._active_spec().fno_segment})
         out.append({"symbol": "INDIA VIX", "exchange": "IDX_I"})
         return out
 
@@ -425,7 +425,7 @@ class DhanDataService:
         idx_sid = spec.index_security_id
         step = spec.strike_step
         idx_seg = "IDX_I"
-        fno_seg = "NSE_FNO"
+        fno_seg = spec.fno_segment  # was hardcoded "NSE_FNO" -- fixed 2026-08-07 for SENSEX/BSE
         vix_sid = "21"  # India VIX security id
 
         from_dt = datetime.strptime(date, "%Y-%m-%d").replace(hour=9, minute=0, tzinfo=_IST_TZ)

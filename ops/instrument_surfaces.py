@@ -53,6 +53,15 @@ AST_ALLOWLIST: dict[str, str] = {
     "ingestion_app/collectors/dhan_depth_collector.py":
         "self-contained by design per its docstring; completeness-checked below",
     "ingestion_app/dhan_client.py": "legacy IDX_* constants (single consumers)",
+    "market_data_dashboard/services/hist_backfill.py":
+        "instrument-keyed expiry-function dispatch table (_EXPIRY_FN) -- deliberately "
+        "explicit and closed, replacing the cadence-binary bug that gave FINNIFTY "
+        "NIFTY's expiry calendar; fails loud (KeyError) on a missing instrument "
+        "rather than silently guessing",
+    "market_data_dashboard/routes/instruments_routes.py":
+        "mirrors hist_backfill.py's instrument-keyed expiry-function map for the "
+        "same reason; missing instrument returns None (this function's pre-existing "
+        "best-effort-display contract), not a live-trading gate",
     "ingestion_app/api_service.py": "symbol-normalization aliases",
     "ml_pipeline_2/scripts/dhan_build_sim_snapshots.py": "operator sim tool",
     # One-shot operator study/debug scripts (category E in the 2026-08-04 sweep):
@@ -173,6 +182,76 @@ def ast_scan_repo() -> list[str]:
     out: list[str] = []
     for p in iter_scannable_python_files():
         out.extend(ast_scan_file(p))
+    return out
+
+
+# ── Exchange-segment hardcoding scan ────────────────────────────────────────
+#
+# Born 2026-08-07, onboarding SENSEX (the first non-NSE instrument).
+# InstrumentSpec.fno_segment existed the whole time (default "NSE_FNO") but
+# was dead in the entire live path -- order placement, historical/quote
+# fetch, and WS subscription all hardcoded the literal "NSE_FNO" instead of
+# reading it. Fixed as a prerequisite before SENSEX's registry entry existed;
+# this scan turns a reintroduced hardcode into a CI failure instead of a
+# live-order-rejection discovered at go-live.
+
+# Files allowed to contain a bare exchange-segment string literal, with the
+# reason. Keep this list short and deliberate -- it is NOT the same list as
+# AST_ALLOWLIST above (a file can be exempt from the instrument-name scan but
+# still owe a registry-derived segment, and vice versa).
+EXCHANGE_SEGMENT_ALLOWLIST: dict[str, str] = {
+    "contracts_app/instruments.py": "the registry itself (FNO_SEGMENT_WS_CODE/FNO_SEGMENT_EXCHANGE)",
+    "ml_pipeline_2/scripts/dhan_data_pipeline.py":
+        "pipeline's own INSTRUMENTS dict already carries a working per-instrument fno_segment field",
+    "ops/instrument_surfaces.py": "this scanner's own pattern definition (_SEGMENT_LITERALS)",
+}
+
+_SEGMENT_LITERALS = {"NSE_FNO", "BSE_FNO"}
+
+
+def exchange_segment_scan_file(path: Path) -> list[str]:
+    """Return violations: a bare exchange-segment string literal in code
+    (not a docstring, not an except-handler fallback) outside the allowlist."""
+    rel = path.relative_to(REPO).as_posix()
+    if rel in EXCHANGE_SEGMENT_ALLOWLIST:
+        return []
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8-sig", errors="replace"))
+    except SyntaxError as exc:
+        return [f"{rel}: unparseable ({exc})"]
+
+    violations: list[str] = []
+
+    def walk(node: ast.AST, stack: list[ast.AST]) -> None:
+        is_docstring = (
+            isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and stack and isinstance(stack[-1], ast.Expr)
+        )
+        if (
+            isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and node.value in _SEGMENT_LITERALS
+            and not is_docstring
+            and not _in_except_handler(stack)
+        ):
+            violations.append(
+                f"{rel}:{node.lineno}: bare {node.value!r} literal -- derive from "
+                "contracts_app.get_instrument(name).fno_segment (or "
+                "fno_segment_ws_code()/FNO_SEGMENT_EXCHANGE for numeric/plain-exchange "
+                "forms) instead"
+            )
+        stack.append(node)
+        for child in ast.iter_child_nodes(node):
+            walk(child, stack)
+        stack.pop()
+
+    walk(tree, [])
+    return violations
+
+
+def exchange_segment_scan_repo() -> list[str]:
+    out: list[str] = []
+    for p in iter_scannable_python_files():
+        out.extend(exchange_segment_scan_file(p))
     return out
 
 

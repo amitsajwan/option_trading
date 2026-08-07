@@ -79,6 +79,32 @@ INSTRUMENTS: Dict[str, InstrumentSpec] = {
         strike_step=50,            # near-ATM step confirmed from live chain
         expiry_cadence="monthly",  # only monthly expiries listed as of 2026-07-26
     ),
+    "SENSEX": InstrumentSpec(
+        # First non-NSE instrument (BSE). Confirmed live 2026-08-07 via scrip
+        # master + historical API probe (see docs/ONBOARDING_INSTRUMENT.md
+        # section 10 for the full record):
+        #  - security_id=51, SEM_CUSTOM_SYMBOL="Sensex", index segment IDX_I
+        #    (same as NSE indices -- no separate BSE index segment).
+        #  - TRAP: "SENSEX" and "SENSEX50" are two different, unrelated index
+        #    families sharing a string prefix (SENSEX50 lot=75, a different
+        #    index). Every symbol-family filter must use an exact
+        #    leading-token match (symbol.split("-",1)[0]), never a prefix
+        #    match -- see execution_app/adapter/dhan.py's _ScripMaster for
+        #    the proven-safe pattern.
+        #  - Expiry weekday: Thursday, universally, with zero exceptions
+        #    across every listed expiry (near-term weeklies through
+        #    2031-dated quarterly contracts). Simpler than NIFTY's Sep-2025
+        #    Thu->Tue cutover -- see hist_backfill.sensex_expiry().
+        #  - Historical data (index/futures daily+intraday, options-history
+        #    endpoint) confirmed available identically to NSE -- no BSE-
+        #    specific gap found; immediate backfill-and-train is safe.
+        name="SENSEX",
+        index_security_id="51",
+        lot_size=20,                # confirmed live scrip master 2026-08-07 (SEM_LOT_UNITS on OPTIDX rows)
+        strike_step=100,            # confirmed via consecutive listed strikes
+        expiry_cadence="weekly",    # near-term weeklies listed, same shape as NIFTY
+        fno_segment="BSE_FNO",
+    ),
 }
 
 # The primary instrument is re-exported from sim_namespace so callers have one
@@ -113,6 +139,33 @@ def known_instruments() -> list[str]:
     return sorted(INSTRUMENTS)
 
 
+# Dhan's numeric ws-feed segment codes (dhanhq.MarketFeed.*) and plain
+# exchange codes (as they appear in the scrip master's SEM_EXM_EXCH_ID
+# column), keyed by InstrumentSpec.fno_segment. Added 2026-08-07 for SENSEX
+# (BSE_FNO) -- the first non-NSE instrument. Add a row here, and nowhere
+# else, when a new exchange segment is onboarded; every live-path call site
+# (order placement, historical/quote fetch, WS subscription, scrip-master
+# filtering) must derive from these tables via get_instrument(name), never
+# hardcode "NSE_FNO"/"BSE_FNO" again -- that was exactly the bug this fixes
+# (the field existed and defaulted to "NSE_FNO" the whole time but was never
+# read anywhere in the live path).
+FNO_SEGMENT_WS_CODE: Dict[str, int] = {"NSE_FNO": 2, "BSE_FNO": 8}
+FNO_SEGMENT_EXCHANGE: Dict[str, str] = {"NSE_FNO": "NSE", "BSE_FNO": "BSE"}
+
+
+def fno_segment_ws_code(name: Optional[str]) -> int:
+    """Numeric WS-feed segment code for ``name``'s fno_segment. Fails loud on
+    an unregistered segment rather than silently defaulting to NSE's code."""
+    spec = get_instrument(name)
+    try:
+        return FNO_SEGMENT_WS_CODE[spec.fno_segment]
+    except KeyError:
+        raise KeyError(
+            f"no ws segment code registered for fno_segment={spec.fno_segment!r} "
+            f"(instrument={spec.name}); add it to FNO_SEGMENT_WS_CODE"
+        ) from None
+
+
 __all__ = [
     "InstrumentSpec",
     "INSTRUMENTS",
@@ -120,4 +173,7 @@ __all__ = [
     "known_instruments",
     "PRIMARY_INSTRUMENT",
     "normalize_instrument",
+    "FNO_SEGMENT_WS_CODE",
+    "FNO_SEGMENT_EXCHANGE",
+    "fno_segment_ws_code",
 ]

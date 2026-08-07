@@ -146,3 +146,56 @@ copy-and-adapt with the preflight checker catching gaps is judged safer than
 a templating layer over a live-money deploy config, at least until a 4th
 instrument's onboarding proves the pattern is stable enough to automate
 further.
+
+## 10. The exchange-segment trap (new with SENSEX, first cross-exchange instrument)
+
+BankNifty/NIFTY/FINNIFTY are all NSE (`NSE_FNO`). `InstrumentSpec.fno_segment`
+existed in the registry the whole time (default `"NSE_FNO"`) but was **dead
+in the entire live path** — `execution_app/adapter/dhan.py`,
+`ingestion_app/dhan_data_service.py` (4 sites), `ingestion_app/dhan_ws_feed.py`
+(numeric WS segment code, not even a string), and
+`ingestion_app/collectors/dhan_depth_collector.py` all hardcoded the literal
+`"NSE_FNO"` instead of reading the registry field. Found and fixed as a
+prerequisite phase (own PR, tested as a no-op against the existing 3
+instruments) before SENSEX's registry entry was even added — see
+`contracts_app/instruments.py`'s `FNO_SEGMENT_WS_CODE`/`FNO_SEGMENT_EXCHANGE`
+tables. If instrument #5 lands on a third exchange, a new CI test
+(`test_ws_segment_codes_cover_every_registered_fno_segment`) fails loudly if
+its segment's numeric WS code isn't registered — don't skip adding it there.
+
+### SENSEX-specific live facts (confirmed via scrip master + historical API calls, 2026-08-07)
+
+- Index: `security_id="51"`, `SEM_CUSTOM_SYMBOL="Sensex"`, segment `IDX_I`
+  (same index segment as NSE — no separate BSE index segment exists).
+- **Trap: "SENSEX" and "SENSEX50" are two different, unrelated index
+  families that share a naive string prefix.** `SEM_TRADING_SYMBOL` values
+  `"SENSEX-Aug2026-FUT"` (lot 20, the real BSE Sensex) and
+  `"SENSEX50-Aug2026-FUT"` (lot 75, a different index) both match
+  `.startswith("SENSEX")`. Every symbol-family filter for SENSEX must split
+  on `-` and compare the exact first token, never a prefix match — this is
+  exactly the kind of cross-symbol collision the FNO-segment work's new
+  `SEM_EXM_EXCH_ID` guard (onboarding doc step 2 / lint test) was added to
+  catch, except this collision happens *within* BSE, not across exchanges.
+- `fno_segment="BSE_FNO"`, lot_size=20 (from `SEM_LOT_UNITS` on `OPTIDX`
+  rows), `strike_step=100` (confirmed via consecutive listed strikes).
+- **Expiry weekday: Thursday, universally** — every listed expiry (7
+  near-term weeklies through 2026-09-24, then monthly/quarterly further out
+  through 2031) lands on a Thursday with zero exceptions. Simpler than
+  NIFTY's Aug-2025 Thu→Tue SEBI cutover — `sensex_expiry()` needs no
+  date-branching, unlike `nifty_weekly_expiry()`.
+  `expiry_cadence="weekly"` (near-term weeklies exist, same shape as NIFTY's
+  registry entry).
+- Historical data coverage confirmed working identically to NSE via the
+  standard SDK calls: index daily (`historical_daily_data`, `IDX_I`), futures
+  daily and intraday minute (`BSE_FNO`) all returned real candle data. The
+  options-specific historical endpoint (`expired_options_data` /
+  `/charts/rollingoption`, used by `get_historical_day`'s per-day options
+  legs) returned an identical accept/empty pattern for SENSEX and a NIFTY
+  control across every parameter combination tried — no BSE-specific
+  rejection or gap found. Verdict: **no evidence of a BSE historical-data
+  gap; proceed with an immediate backfill-and-train timeline, same shape as
+  FINNIFTY's**, not a weeks-long live-collection-only fallback. The exact
+  working parameter recipe for options legs should be validated by exercising
+  the codebase's own `get_historical_day()` path directly (once its
+  `fno_segment` hardcode is fixed) rather than re-derived from a probe
+  script.

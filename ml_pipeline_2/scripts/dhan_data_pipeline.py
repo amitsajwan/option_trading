@@ -128,6 +128,19 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         # keep the training window conservatively recent (see fetch invocation).
         expiry_cadence="monthly",
     ),
+    "SENSEX": InstrumentConfig(
+        # First non-NSE instrument (BSE). Confirmed live 2026-08-07 -- see
+        # contracts_app/instruments.py's SENSEX entry for the full record
+        # (security_id, the SENSEX-vs-SENSEX50 symbol-collision trap,
+        # Thursday-always expiry weekday, confirmed historical-data coverage).
+        name="SENSEX",
+        index_security_id="51",
+        fno_segment="BSE_FNO",
+        index_segment="IDX_I",
+        lot_size=20,
+        strike_step=100,
+        expiry_cadence="weekly",
+    ),
 }
 
 # ── Dhan API Client ───────────────────────────────────────────────────────────
@@ -267,11 +280,21 @@ def _monthly_futures_contracts(
     # is a substring of "BANKNIFTY"/"FINNIFTY"/etc, so .str.contains() here
     # returned BANKNIFTY's future for a NIFTY request. Symbols are
     # "{FAMILY}-{expiry}-FUT".
+    # Exchange guard (added 2026-08-07 for SENSEX/BSE, the first non-NSE
+    # instrument): SEM_SEGMENT=="D" matches derivatives on every exchange,
+    # not just NSE. The exact-token symbol match above already prevents a
+    # cross-exchange symbol collision for any instrument pair seen so far,
+    # but this is now explicit rather than incidental.
+    exch_col = next((c for c in sm.columns if c.upper() == "SEM_EXM_EXCH_ID"), None)
+    _fno_seg = INSTRUMENTS[instrument_name.upper()].fno_segment
+    expected_exchange = _fno_seg.split("_", 1)[0]  # "NSE_FNO" -> "NSE", "BSE_FNO" -> "BSE"
     filt = (
         (sm[seg_col].astype(str).str.upper().str.strip() == "D")
         & (sm[inst_col].str.upper().str.strip() == "FUTIDX")
         & (sm[sym_col].str.upper().str.split("-").str[0] == instrument_name.upper())
     )
+    if exch_col is not None:
+        filt &= (sm[exch_col].astype(str).str.upper().str.strip() == expected_exchange)
     fut = sm[filt].copy()
     if fut.empty:
         log.warning("No %s FUTIDX contracts found in scrip master (instrument_name=%s)",
@@ -293,9 +316,18 @@ def _monthly_futures_contracts(
     # already-correct expiry-day rule tables in hist_backfill) to keep this
     # fix minimal and scoped; if NSE changes the day again this constant needs
     # updating too, same as that other rule table does.
+    # Instrument-keyed monthly-expiry weekday (fixed 2026-08-07 for SENSEX):
+    # this used to be a bare weekday()==1 (Tuesday) constant applied to every
+    # instrument -- correct for NSE post-Sep-2025 but SENSEX (BSE) expires
+    # every Thursday unconditionally (confirmed live via scrip master
+    # 2026-08-07: 2026-08-27/09-24/10-29 futures all land on Thursday). A
+    # hardcoded constant here (not dynamically derived) matches the existing
+    # scoping decision above; add a row here if NSE/BSE change their day again.
+    _MONTHLY_WEEKDAY = {"BANKNIFTY": 1, "NIFTY": 1, "FINNIFTY": 1, "SENSEX": 3}
+    expected_weekday = _MONTHLY_WEEKDAY.get(instrument_name.upper(), 1)
     fut["_is_monthly"] = fut["_expiry"].apply(
         lambda d: (d is not None and not pd.isna(d)
-                   and d.weekday() == 1  # Tuesday, post ~Sep-2025
+                   and d.weekday() == expected_weekday
                    and d.day >= 22)      # last-week heuristic
     )
     monthly = fut[fut["_is_monthly"]].copy()

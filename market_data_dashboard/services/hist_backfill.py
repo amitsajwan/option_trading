@@ -62,6 +62,18 @@ def nifty_weekly_expiry(d: date) -> date:
     return exp
 
 
+def sensex_expiry(d: date) -> date:
+    """SENSEX (BSE) weekly expiry on/after d. Confirmed live 2026-08-07 via
+    scrip master: every listed SENSEX expiry (7 near-term weeklies plus
+    monthly/quarterly further out, through 2031) lands on a Thursday with
+    zero exceptions -- no NSE-style mid-year weekday cutover to track here,
+    unlike nifty_weekly_expiry. VERIFY against a live scrip-master pull if
+    BSE's SEBI-mandated weekly-expiry day ever changes."""
+    target = 3  # Thursday
+    exp = d + timedelta(days=(target - d.weekday()) % 7)
+    return exp
+
+
 def bn_monthly_expiry(d: date) -> date:
     """BANKNIFTY monthly expiry for the month containing/after d.
 
@@ -106,16 +118,29 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
       the direction lever was blind on hist data. Enriched here via the SAME
       canonical modules the training view uses (no drift)."""
     d = date.fromisoformat(trade_date)
-    # Cadence from the registry, NOT a BANKNIFTY-vs-everyone-else binary:
-    # that binary gave FINNIFTY (monthly per registry) NIFTY's WEEKLY expiry on
-    # every backfilled snapshot -- wrong days_to_expiry/is_expiry_day/expiry on
-    # all 359 days of its first clean backfill (found 2026-08-04 sweep). DTE
-    # drives seller exits and is a model feature. NOTE: bn_monthly_expiry's
-    # era-dependent weekday table (Wed->Thu->Tue) is exchange-wide for index
-    # monthlies, so it applies to any monthly-cadence instrument, not just BN.
-    from contracts_app import get_instrument
-    cadence = get_instrument(instrument).expiry_cadence
-    exp = bn_monthly_expiry(d) if cadence == "monthly" else nifty_weekly_expiry(d)
+    # Instrument-keyed, NOT cadence-keyed (fixed 2026-08-07 for SENSEX): a
+    # cadence binary (monthly->bn_monthly_expiry, else->nifty_weekly_expiry)
+    # is exactly the bug shape that gave FINNIFTY (monthly per registry)
+    # NIFTY's WEEKLY expiry on every backfilled snapshot -- wrong
+    # days_to_expiry/is_expiry_day/expiry on all 359 days of its first clean
+    # backfill (found 2026-08-04 sweep). Picking the "right" existing
+    # function by cadence alone isn't safe either: SENSEX is weekly cadence
+    # like NIFTY, but nifty_weekly_expiry's NSE-specific Thu->Tue cutover
+    # (Sep-2025) does not apply to BSE (confirmed live: SENSEX is Thursday,
+    # unconditionally). DTE drives seller exits and is a model feature.
+    _EXPIRY_FN = {
+        "BANKNIFTY": bn_monthly_expiry,
+        "NIFTY": nifty_weekly_expiry,
+        "FINNIFTY": bn_monthly_expiry,
+        "SENSEX": sensex_expiry,
+    }
+    inst_u = instrument.strip().upper()
+    if inst_u not in _EXPIRY_FN:
+        raise KeyError(
+            f"no expiry function registered for {inst_u!r} in hist_backfill._EXPIRY_FN "
+            "-- add one (never fall back to cadence-matching, see comment above)"
+        )
+    exp = _EXPIRY_FN[inst_u](d)
     dte = (exp - d).days
     last: dict[tuple[int, str], float] = {}   # (strike, field) -> last non-None
     for s in snapshots:
