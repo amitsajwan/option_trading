@@ -158,6 +158,38 @@ class MlShadowBookkeepingTest(unittest.TestCase):
         self.assertEqual(cand["terminal_status"], "shadow_only")
         self.assertFalse(cand["selected"])  # never actionable
 
+    def test_ml_score_all_snapshots_survives_per_bar_set_run_context(self):
+        """The real gap (found 2026-08-07, live): redis_snapshot_consumer.py
+        calls engine.set_run_context(run_id, metadata) on EVERY live bar, but
+        `metadata` there is the snapshot event's own metadata -- it never
+        carries ml_score_all_snapshots (that key only exists in main.py's
+        startup run_metadata). set_run_context used to unconditionally do
+        `self._ml_score_all_snapshots = as_bool(metadata.get(...))`, which is
+        as_bool(None) == False -- silently resetting the flag to False on the
+        very first live bar after startup. So even after fixing the shadow
+        vote to survive the no-votes early return, ML_SCORE_ALL_SNAPSHOTS=1
+        never actually produced a shadow candidate live: the flag was already
+        False by the time any bar past the first got evaluated."""
+        with tempfile.TemporaryDirectory() as d:
+            engine = self._engine(d)
+            # Startup call: main.py passes the full run_metadata dict, which
+            # does carry the key.
+            engine.set_run_context("run-1", {"ml_score_all_snapshots": True})
+            self.assertTrue(engine._ml_score_all_snapshots)
+
+            # Per-bar call: redis_snapshot_consumer.py passes the snapshot
+            # event's own metadata -- shaped like a real event, but with no
+            # ml_score_all_snapshots key at all.
+            engine.set_run_context("run-1", {"risk_config": {"stop_loss_pct": None}})
+            self.assertTrue(
+                engine._ml_score_all_snapshots,
+                "flag must survive a set_run_context call whose metadata lacks the key",
+            )
+
+            # Explicit False must still be honored (real config bounce).
+            engine.set_run_context("run-1", {"ml_score_all_snapshots": False})
+            self.assertFalse(engine._ml_score_all_snapshots)
+
     def test_never_raises_on_strategy_exception(self):
         with tempfile.TemporaryDirectory() as d:
             engine = self._engine(d)

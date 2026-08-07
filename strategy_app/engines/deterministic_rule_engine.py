@@ -322,9 +322,19 @@ class DeterministicRuleEngine(StrategyEngine):
             self._strategy_profile_id = profile_override
         elif isinstance(router_payload, dict):
             self._strategy_profile_id = self._router.strategy_profile_id
-        self._ml_score_all_snapshots = (
-            as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
-        )
+        # Preserve-unless-explicit (fixed 2026-08-07, live): this used to
+        # unconditionally overwrite the flag on EVERY call, including the
+        # per-snapshot-event calls from redis_snapshot_consumer.py's
+        # _process_event(), which passes the snapshot event's own metadata --
+        # never the strategy engine's ml_score_all_snapshots key. That reset
+        # the flag to False on the very first live bar after startup, every
+        # time, silently undoing main.py's initial set_run_context() call.
+        # ML_SCORE_ALL_SNAPSHOTS=1 has been live-enabled since 2026-08-06 and
+        # produced ZERO shadow candidates the whole first day because of this
+        # -- "live trading currently never sets this" (old docstring) was
+        # literally true because no one had ever gotten this far before.
+        if isinstance(metadata, dict) and "ml_score_all_snapshots" in metadata:
+            self._ml_score_all_snapshots = as_bool(metadata.get("ml_score_all_snapshots"))
         self._set_logger_context(new_run_id or self._run_id)
 
     def _set_logger_context(self, run_id: Optional[str]) -> None:
