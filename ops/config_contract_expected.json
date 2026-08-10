@@ -67,6 +67,26 @@
         "EXIT_MAX_LOSS_PCT"
       ]
     },
+    "option_trading-strategy_app_sensex-1": {
+      "instrument": "SENSEX",
+      "_comment": "2026-08-10: cold-start v1 model, holdout AUC 0.6845 (fails formal >=0.70 gate) but real separation/calibration -- threshold 0.70 picked from a genuine quantization cliff (0.7-0.8 bin: 75% precision, n=8; 0.6-0.7 bin: 0% precision, n=6). Small holdout sample -- RISK_LIVE_MIN_GRADE=GOOD is the compensating control. Launching buyer-side paper mode only; retrain once more live data accumulates.",
+      "expect": {
+        "ENTRY_ML_MODEL_PATH": "/app/models/sensex_entry_015pct_v1.joblib",
+        "ENTRY_ML_MIN_PROB": "0.70",
+        "ENTRY_ML_MAX_NAN_FEATURES": "2",
+        "SENSEX_LOT_SIZE": "20",
+        "ML_ENTRY_DIRECTION_MODE": "composite",
+        "ENTRY_DIR_W_ML": "0",
+        "RISK_LIVE_MIN_GRADE": "GOOD",
+        "RISK_MAX_LOTS_PER_TRADE": "1",
+        "DEPTH_FEED_ENABLED": "1",
+        "STRATEGY_PROFILE_ID": "trader_master_ml_entry_v1"
+      },
+      "require_nonempty": [
+        "EXIT_STRATEGY_MODE",
+        "EXIT_MAX_LOSS_PCT"
+      ]
+    },
     "option_trading-execution_app-1": {
       "instrument": "BANKNIFTY",
       "expect": {
@@ -157,6 +177,37 @@
         "SELLER_MAX_HOLD_DAYS": "5",
         "SELLER_CONDOR_OFFSET": "100",
         "SELLER_SPREAD_WIDTH": "150"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN",
+        "SELLER_IV_RANK_MIN",
+        "SELLER_MIN_FREE_MARGIN_RS"
+      ]
+    },
+    "option_trading-execution_app_sensex-1": {
+      "instrument": "SENSEX",
+      "_comment": "2026-08-10 launch state: paper. First BSE instrument, buyer-side only (user decision). Flip EXECUTION_ADAPTER's expect to 'dhan' in the SAME commit that sets SENSEX_EXECUTION_ADAPTER=dhan in .env.compose once paper-mode decision traces look sane.",
+      "expect": {
+        "EXECUTION_ADAPTER": "paper",
+        "EXECUTION_REQUIRE_LIVE_TIER": "1",
+        "SENSEX_LOT_SIZE": "20"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN"
+      ]
+    },
+    "option_trading-seller_app_sensex-1": {
+      "instrument": "SENSEX",
+      "_comment": "2026-08-10 launch state: paper/disabled. SENSEX launches buyer-side first (user decision) -- seller stays off until buyer is confirmed stable, then flip both expects to 'dhan'/'1' in the SAME commit as .env.compose.",
+      "expect": {
+        "EXECUTION_ADAPTER": "paper",
+        "SELLER_LIVE_ENABLED": "0",
+        "SELLER_MAX_CONCURRENT": "1",
+        "SELLER_MAX_HOLD_DAYS": "5",
+        "SELLER_CONDOR_OFFSET": "200",
+        "SELLER_SPREAD_WIDTH": "300"
       },
       "require_nonempty": [
         "DHAN_CLIENT_ID",

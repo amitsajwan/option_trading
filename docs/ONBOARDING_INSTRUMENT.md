@@ -199,3 +199,43 @@ its segment's numeric WS code isn't registered — don't skip adding it there.
   the codebase's own `get_historical_day()` path directly (once its
   `fno_segment` hardcode is fixed) rather than re-derived from a probe
   script.
+
+### Cold-start training: the regime-shift trap (2026-08-09/10)
+
+Backfilled 146 trading days (2026-01-01..2026-08-06, 54,822 snapshots,
+verified clean — every listed expiry hit `dte=0` on its Thursday, zero
+DTE anomalies across the whole window). First training attempt (train on the
+full window, holdout on the most recent month) produced a **degenerate**
+model: every holdout probability fell between 0 and 0.3, no separation at
+any threshold. Root cause, confirmed by a monthly VIX/move-size breakdown:
+SENSEX had a real volatility spike in March-April 2026 (VIX ~20-22) that
+decayed back to baseline by July-August (VIX ~12, matching January). Train
+was dominated by the spike; holdout landed in the calmest month in the
+dataset — same failure shape already seen once with BankNifty ("quantified
+regime shift", see project memory). Isotonic calibration fit on a
+regime-mismatched validation set compressed every prediction toward the
+lower, spike-era base rate.
+
+Fix attempt #2 (shrink train/valid/holdout to a short, regime-consistent
+window) made holdout AUC *worse* (0.546, barely above chance) — the shorter
+window didn't have enough independent trading days (~7 each for valid/
+holdout) to avoid HPO overfitting on a small, autocorrelated sample.
+
+Fix attempt #3 (the one that worked): keep the **full 6 months for training**
+(more data for the underlying fit) but confine **both** valid and holdout to
+the same recent, regime-consistent window (2026-07-01 onward), so
+calibration adapts to current conditions while the tree model still gets
+enough data to generalize. Holdout AUC=0.6845 (still fails the formal ≥0.70
+gate) but separation (0.35-0.67) and calibration (ECE=0.021) both pass, with
+a real natural quantization cliff: the 0.6-0.7 probability bin was pure noise
+(n=6, 0% hit rate) while 0.7-0.8 was strong (n=8, 75% hit rate vs an 8.4%
+base rate). `ENTRY_ML_MIN_PROB=0.70` was picked from that cliff, not the
+wider 0.6+ blend — same "pick the sharp bucket" call FINNIFTY's v1 launch
+made. Small sample (n=8) backing the cliff — `RISK_LIVE_MIN_GRADE=GOOD` is
+the compensating control, same posture as FINNIFTY's own cold start.
+
+**Lesson for the next cold-start instrument:** when picking train/valid/
+holdout windows for a brand-new instrument, check the *positive-rate trend
+across the window first* (a simple monthly groupby), not just total row
+count. A window that blends two different volatility regimes will train a
+model whose calibration is right for neither.

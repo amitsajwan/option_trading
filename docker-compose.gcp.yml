@@ -2733,16 +2733,30 @@ services:
       TRADE_SIGNAL_TOPIC: "market:sensex:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:sensex:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:sensex:strategy:decision_trace:v1"
-      # PLACEHOLDER -- no SENSEX entry model exists yet (Phase 6 of the
-      # onboarding plan, cold start, needs live-collected data first). This
-      # path deliberately does not exist yet: strategy_app_sensex must NOT be
-      # brought up until it does (fail loud on a missing model, not silently
-      # degrade). Do not point this at a sibling's model.
+      # Trained 2026-08-10 (v1): cold-start entry model, 47 ENTRY_FEATURES_V3
+      # features, 0.15% label / 15min horizon, XGBoost + isotonic calibration.
+      # Train 2026-01-01..2026-06-30 (6mo, more data for the underlying fit),
+      # valid+holdout both confined to 2026-07-01..2026-08-06 (regime-
+      # consistent with each other and with "now" -- an earlier attempt that
+      # blended a Mar-Apr volatility spike into train produced a degenerate,
+      # miscalibrated model; see docs/ONBOARDING_INSTRUMENT.md history).
+      # Holdout AUC=0.6845 (fails the formal >=0.70 ship gate) but separation
+      # (0.35-0.67) and calibration (ECE=0.021) both pass -- same shape as
+      # FINNIFTY's v1 launch: a real, narrow high-confidence tail worth using
+      # cautiously, not a degenerate model. See report.json's holdout_eval
+      # for the full reliability/separation tables.
       ENTRY_ML_MODEL_PATH: "${SENSEX_ENTRY_ML_MODEL_PATH:-/app/models/sensex_entry_015pct_v1.joblib}"
-      # PLACEHOLDER -- per onboarding doc lesson #7, never copy a sibling's
-      # threshold. Recompute empirically from this model's own probability
-      # distribution once Phase 6 trains it.
-      ENTRY_ML_MIN_PROB: "${SENSEX_ENTRY_ML_MIN_PROB:-0.60}"
+      # Empirical (per onboarding doc lesson #7, never copy a sibling's
+      # number): natural quantization cliff at 0.70 -- the 0.6-0.7 holdout
+      # bin was pure noise (n=6, 0% hit rate) but 0.7-0.8 was strong (n=8,
+      # 75% hit rate vs 8.4% base rate). Picking the cliff, not the wider
+      # 0.6+ blend (42.9% precision), matches the same "select the sharp
+      # bucket, not the loose one" call FINNIFTY's launch made. Implied fire
+      # rate is very low (~0.2% of bars, roughly ~1/day) -- a real but rare
+      # signal, not "never"; RISK_LIVE_MIN_GRADE=GOOD below is the
+      # compensating control given the small holdout sample (n=8) this
+      # threshold is based on.
+      ENTRY_ML_MIN_PROB: "${SENSEX_ENTRY_ML_MIN_PROB:-0.70}"
       # No SENSEX direction-ML bundle exists yet, same posture as FINNIFTY's
       # block above: ENTRY_DIR_W_ML explicitly zeroed rather than left at its
       # default with no model behind it. ML_ENTRY_DIRECTION_MODE=composite

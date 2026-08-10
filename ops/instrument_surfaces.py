@@ -220,8 +220,9 @@ _SEGMENT_LITERALS = {"NSE_FNO", "BSE_FNO"}
 # adds its 3 real config_contract_expected.json entries (i.e. the commit that
 # actually starts those containers) -- this is not a permanent exemption.
 CONFIG_CONTRACT_DEFERRED: dict[str, str] = {
-    "SENSEX": "2026-08-07 onboarding, cold start -- no trained entry model yet, "
-              "strategy_app_sensex/execution_app_sensex/seller_app_sensex not started",
+    # SENSEX removed 2026-08-10: v1 entry model trained, real config_contract
+    # entries added for strategy_app_sensex/execution_app_sensex/
+    # seller_app_sensex in the same commit -- see docs/ONBOARDING_INSTRUMENT.md.
 }
 
 
