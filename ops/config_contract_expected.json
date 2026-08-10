@@ -4,10 +4,10 @@
   "services": {
     "option_trading-strategy_app-1": {
       "instrument": "BANKNIFTY",
-      "_comment": "2026-08-10: calculated-risk loosening (user decision after a 'no trades' review) -- ENTRY_ML_MIN_PROB 0.6->0.55 and ENTRY_ALLOW_CHOP turned on (CHOP was BankNifty's single largest regime bucket that day, 38% of bars, previously fully excluded). PRE_EXPIRY and STRATEGY_MIN_CONFIDENCE deliberately left untouched -- PRE_EXPIRY's risk is an unprotected gap (-16.3% in one bar, a different risk category than CHOP's 'market didn't move' losses), decided separately.",
+      "_comment": "2026-08-10: calculated-risk loosening (user decision after a 'no trades' review) -- ENTRY_ALLOW_CHOP turned on (CHOP was BankNifty's single largest regime bucket that day, 38% of bars, previously fully excluded). ENTRY_ML_MIN_PROB deliberately left at its original 0.6, NOT lowered alongside it -- reverted an initial 0.6->0.55 change same-day to isolate CHOP as the only variable; lowering the threshold inside a regime being reopened specifically for false-signal risk would have compounded, not just added to, that risk, and muddied which change did what. Revisit the threshold as its own decision once CHOP-alone has been observed. PRE_EXPIRY and STRATEGY_MIN_CONFIDENCE deliberately left untouched -- PRE_EXPIRY's risk is an unprotected gap (-16.3% in one bar, a different risk category than CHOP's 'market didn't move' losses), decided separately.",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_015pct_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.55",
+        "ENTRY_ML_MIN_PROB": "0.6",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
         "SMART_STRIKE_MIN_PREMIUM": "100",
         "ML_ENTRY_DIRECTION_MODE": "direction_ml",
