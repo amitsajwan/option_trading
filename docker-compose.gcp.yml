@@ -61,6 +61,20 @@ services:
       BROKER: "${BROKER:-kite}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      # Kill switch for the WS feed's reconnect loop (2026-08-10): a burst of
+      # container restarts triggered a Dhan IP-level block ("Too many
+      # requests from this IP hence client id is blocked") on the WS
+      # handshake specifically -- REST calls with the same token/IP still
+      # work fine. The reconnect loop's own exponential backoff (max 120s
+      # cap) kept retrying for 3 days straight, likely re-triggering/
+      # extending the block on every attempt. DHAN_WS_ENABLED=0 forces
+      # dhan_ws_feed.py into REST-only mode (get_tick()'s documented
+      # fallback path) without touching this container's REST API, which
+      # snapshot_app/BankNifty's whole pipeline depends on. Re-enable once
+      # the block has had time to clear -- test with a single isolated probe
+      # first, not by just flipping this back and letting the loop hammer
+      # again.
+      DHAN_WS_ENABLED: "${DHAN_WS_ENABLED:-1}"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
       MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
       MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
