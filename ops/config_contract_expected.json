@@ -4,9 +4,10 @@
   "services": {
     "option_trading-strategy_app-1": {
       "instrument": "BANKNIFTY",
+      "_comment": "2026-08-10: calculated-risk loosening (user decision after a 'no trades' review) -- ENTRY_ML_MIN_PROB 0.6->0.55 and ENTRY_ALLOW_CHOP turned on (CHOP was BankNifty's single largest regime bucket that day, 38% of bars, previously fully excluded). PRE_EXPIRY and STRATEGY_MIN_CONFIDENCE deliberately left untouched -- PRE_EXPIRY's risk is an unprotected gap (-16.3% in one bar, a different risk category than CHOP's 'market didn't move' losses), decided separately.",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_015pct_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.6",
+        "ENTRY_ML_MIN_PROB": "0.55",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
         "SMART_STRIKE_MIN_PREMIUM": "100",
         "ML_ENTRY_DIRECTION_MODE": "direction_ml",
@@ -18,7 +19,8 @@
         "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
         "ENTRY_ML_MODEL_PATH_2": "/app/models/dhan_entry_fast_v1.joblib",
         "ENTRY_ML_MIN_PROB_2": "0.6",
-        "ML_SCORE_ALL_SNAPSHOTS": "1"
+        "ML_SCORE_ALL_SNAPSHOTS": "1",
+        "ENTRY_ALLOW_CHOP": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
