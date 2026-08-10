@@ -426,7 +426,12 @@ services:
       # whether the CHOP exclusion (justified by a single 2026-06-03 incident) is
       # still earning its keep, without risking any money either way.
       ML_SCORE_ALL_SNAPSHOTS: "${ML_SCORE_ALL_SNAPSHOTS:-1}"
-      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
+      # Namespaced (2026-08-10): was the bare ENTRY_ALLOW_CHOP, shared with
+      # strategy_app_historical/strategy_app_sim below -- flipping it on for
+      # BankNifty would have silently changed those two non-live containers'
+      # behavior too on their next recreate, with no deliberate decision
+      # behind it. Renamed to isolate BankNifty's own live switch.
+      ENTRY_ALLOW_CHOP: "${BANKNIFTY_ENTRY_ALLOW_CHOP:-}"
       ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
@@ -2515,6 +2520,16 @@ services:
       # fires 13:57 vs v3 at the bottom). June calib: 7 bars/month at thr 0.08.
       ENTRY_ML_MODEL_PATH_2: "${NIFTY_ENTRY_ML_MODEL_PATH_2:-/app/models/nifty_entry_fast_v1.joblib}"
       ENTRY_ML_MIN_PROB_2: "${NIFTY_ENTRY_ML_MIN_PROB_2:-0.08}"
+      # Calculated-risk loosening (2026-08-10, user decision, same isolated
+      # change as BankNifty's): CHOP was ~20% of NIFTY's bars over a 3-day
+      # sample, previously fully excluded (see the 52%-blocked comment
+      # below). Namespaced (NIFTY_-prefixed), NOT the bare ENTRY_ALLOW_CHOP
+      # BankNifty/strategy_app_historical/strategy_app_sim use -- that var is
+      # shared/unnamespaced and flipping it would have silently changed
+      # those other containers too the next time they're recreated.
+      # ENTRY_ML_MIN_PROB deliberately untouched, same reasoning as BankNifty:
+      # isolate CHOP as the only variable before considering the threshold.
+      ENTRY_ALLOW_CHOP: "${NIFTY_ENTRY_ALLOW_CHOP:-}"
       DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-/app/models/nifty_direction_v2.joblib}"
       DIRECTION_ML_MIN_MARGIN: "${DIRECTION_ML_MIN_MARGIN:-0}"
       ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"

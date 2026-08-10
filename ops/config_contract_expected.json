@@ -30,6 +30,7 @@
     },
     "option_trading-strategy_app_nifty-1": {
       "instrument": "NIFTY",
+      "_comment": "2026-08-10: calculated-risk loosening, same isolated pattern as BankNifty -- ENTRY_ALLOW_CHOP on (CHOP was ~20% of NIFTY's bars over a 3-day sample, previously fully excluded), ENTRY_ML_MIN_PROB left untouched to isolate the variable. Sourced from the namespaced NIFTY_ENTRY_ALLOW_CHOP in .env.compose, not the bare var BankNifty/historical/sim containers use.",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/nifty_entry_015pct_v1.joblib",
         "ENTRY_ML_MIN_PROB": "0.5",
@@ -42,7 +43,8 @@
         "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
         "ENTRY_ML_MODEL_PATH_2": "/app/models/nifty_entry_fast_v1.joblib",
         "ENTRY_ML_MIN_PROB_2": "0.30",
-        "ML_SCORE_ALL_SNAPSHOTS": "1"
+        "ML_SCORE_ALL_SNAPSHOTS": "1",
+        "ENTRY_ALLOW_CHOP": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
