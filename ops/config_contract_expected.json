@@ -80,7 +80,7 @@
         "RISK_LIVE_MIN_GRADE": "GOOD",
         "RISK_MAX_LOTS_PER_TRADE": "1",
         "DEPTH_FEED_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_ml_entry_v1"
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
