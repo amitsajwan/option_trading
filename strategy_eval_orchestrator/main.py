@@ -21,7 +21,7 @@ from typing import Any, Iterable, Optional
 import redis
 from pymongo import MongoClient
 
-from contracts_app import build_snapshot_event, historical_snapshot_topic
+from contracts_app import build_snapshot_event, historical_snapshot_topic, stream_name_for_topic
 from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
@@ -271,7 +271,26 @@ def _replay_and_publish(
                 "policy_config": {"iv_pct_hard_max": 100.5},
             },
         )
-        redis_client.publish(topic, json.dumps(event, ensure_ascii=False, default=str))
+        # Was redis_client.publish(topic, ...) -- plain pub/sub. Found
+        # 2026-08-11: strategy_app_historical's consumer reads via
+        # XREADGROUP on a Streams key (durable, catch-up capable), not
+        # SUBSCRIBE -- a pub/sub PUBLISH with no live subscriber is simply
+        # lost, so this replay path emitted events that were NEVER received
+        # by any consumer, silently producing "0 trades" for every replay
+        # ever run through this endpoint. Switched to XADD, matching the
+        # exact wire format snapshot_app.redis_publisher.RedisEventPublisher
+        # already uses for live (field names "payload"/"topic") so the
+        # consumer needs no changes. maxlen is generously large (not live's
+        # tight 500) -- a month-long replay emits far more events than a
+        # live rolling window ever holds, and unlike live there's no ongoing
+        # producer to keep the window "recent"; if the consumer falls behind,
+        # a small maxlen would silently evict not-yet-read historical bars.
+        redis_client.xadd(
+            stream_name_for_topic(topic),
+            {"payload": json.dumps(event, ensure_ascii=False, default=str), "topic": str(topic)},
+            maxlen=200_000,
+            approximate=True,
+        )
         emitted += 1
         pct = int(((idx + 1) / max(1, total)) * 100)
         if pct != last_pct and (pct % 5 == 0 or pct == 100):
