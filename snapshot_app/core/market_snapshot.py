@@ -1687,7 +1687,17 @@ def build_market_snapshot(
         arr = arr[np.isfinite(arr)]
         if arr.size > 0:
             iv_percentile = float(100.0 * (np.sum(arr <= float(atm_iv)) / arr.size))
-    if atm_iv is not None and np.isfinite(atm_iv):
+    # Sanity ceiling (found 2026-08-11 auditing NIFTY's IV-rank gate): near
+    # expiry, a near-worthless option's back-solved IV becomes numerically
+    # unstable -- observed values up to 298% mixed in with normal ~10-20%
+    # readings in the EXPIRY_DAY bucket specifically (~7% of that bucket's
+    # 5,694 samples). No index option's IV has ever genuinely sustained
+    # above 100% (atm_iv is a fraction, so 1.0 = 100%). Excluding these from
+    # the rolling history prevents them from silently corrupting future
+    # iv_percentile/IV-rank readings (the seller's real-money entry gate) --
+    # the CURRENT bar's own percentile above still uses whatever atm_iv this
+    # bar computed, only the history-for-future-comparisons is guarded.
+    if atm_iv is not None and np.isfinite(atm_iv) and atm_iv <= 1.0:
         hist.append(float(atm_iv))
 
     iv_regime = None
@@ -1870,10 +1880,14 @@ class LiveMarketSnapshotBuilder:
                 return
             with open(path) as fh:
                 doc = json.load(fh)
+            # Same >100% IV sanity ceiling as the live append path (see
+            # build_market_snapshot) -- drop any contamination that was
+            # persisted before that guard existed, so a restart doesn't
+            # silently reload it.
             self.state.iv_history_expiry.extend(
-                float(v) for v in doc.get("expiry", []))
+                float(v) for v in doc.get("expiry", []) if float(v) <= 1.0)
             self.state.iv_history_non_expiry.extend(
-                float(v) for v in doc.get("non_expiry", []))
+                float(v) for v in doc.get("non_expiry", []) if float(v) <= 1.0)
             self._iv_logger.info(
                 "iv-state restored: %d expiry / %d non-expiry bars (saved %s)",
                 len(self.state.iv_history_expiry),

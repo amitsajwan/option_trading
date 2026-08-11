@@ -248,3 +248,47 @@ def test_mongo_velocity_context_provider_primary_instrument_unchanged(monkeypatc
         "phase1_market_snapshots",
         "phase1_market_snapshots_historical",
     )
+
+
+# ─── IV-history sanity ceiling (2026-08-11) ───
+# Live regression: NIFTY's iv_history_expiry deque was found with ~7% of its
+# 5,694 persisted bars at implausible values (up to 2.986 = 298.6% IV) --
+# near-expiry, near-worthless options make Black-Scholes IV-solving
+# numerically unstable. These values silently corrupt every future
+# iv_percentile/IV-rank read (the seller's real-money entry gate) until the
+# 30k-bar deque rolls them out ~80 sessions later. Guard both entry points:
+# the live append (build_market_snapshot) and the on-disk restore.
+
+def test_restore_iv_state_drops_implausible_persisted_values(tmp_path, monkeypatch):
+    import json
+
+    state_dir = tmp_path / "iv_state"
+    state_dir.mkdir()
+    monkeypatch.setenv("SNAPSHOT_STATE_DIR", str(state_dir))
+    (state_dir / "iv_state_BANKNIFTYFUT.json").write_text(json.dumps({
+        "saved_at": "2026-08-11T00:00:00",
+        "expiry": [0.109, 0.082, 1.134, 0.098, 2.986],
+        "non_expiry": [0.12, 0.15],
+    }))
+
+    b = LiveMarketSnapshotBuilder(instrument="BANKNIFTYFUT", enable_kite_backfill=False)
+
+    assert list(b.state.iv_history_expiry) == [0.109, 0.082, 0.098]
+    assert list(b.state.iv_history_non_expiry) == [0.12, 0.15]
+
+
+def test_restore_iv_state_keeps_boundary_value(tmp_path, monkeypatch):
+    import json
+
+    state_dir = tmp_path / "iv_state"
+    state_dir.mkdir()
+    monkeypatch.setenv("SNAPSHOT_STATE_DIR", str(state_dir))
+    (state_dir / "iv_state_BANKNIFTYFUT.json").write_text(json.dumps({
+        "saved_at": "2026-08-11T00:00:00",
+        "expiry": [1.0, 1.0001],
+        "non_expiry": [],
+    }))
+
+    b = LiveMarketSnapshotBuilder(instrument="BANKNIFTYFUT", enable_kite_backfill=False)
+
+    assert list(b.state.iv_history_expiry) == [1.0]
