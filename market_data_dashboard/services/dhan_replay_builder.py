@@ -15,7 +15,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from snapshot_app.core.market_snapshot import _ladder_aggregates
+from snapshot_app.core.market_snapshot import _ladder_aggregates, _normalize_iv
 from snapshot_app.core.market_snapshot_contract import REQUIRED_BLOCK_FIELDS
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,20 @@ def build_snapshots_from_dhan_data(
                 if label not in option_by_ts[ts]:
                     option_by_ts[ts][label] = {}
                 for k, v in b.items():
-                    if k != "ts":
+                    if k == "ts":
+                        continue
+                    if k.endswith("_iv"):
+                        # Found 2026-08-11: Dhan's rollingoption IV comes back
+                        # as raw percentage points (e.g. 11.47 meaning 11.47%),
+                        # ~100x live's decimal convention (0.1147) -- live's
+                        # _compute_iv always runs this same normalization.
+                        # Left un-normalized, every IV-derived field here
+                        # (atm_ce_iv/pe_iv, iv_skew, iv_percentile via
+                        # iv_percentile_pass) was internally self-consistent
+                        # but on a different scale than live, undermining
+                        # any comparison between backfilled and live IV-rank.
+                        option_by_ts[ts][label][k] = _normalize_iv(_f(v) or float("nan"))
+                    else:
                         option_by_ts[ts][label][k] = _f(v)
 
     # Running state for accumulators (day_high, day_low, open etc)

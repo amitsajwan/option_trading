@@ -110,6 +110,28 @@ class HistBackfillSchemaContractTest(unittest.TestCase):
         snapshots = _build_day(n_bars=2)
         self.assertEqual(snapshots[0]["schema_name"], "MarketSnapshot")
 
+    def test_dhan_percentage_point_iv_is_normalized_to_decimal(self) -> None:
+        """Regression for the 2026-08-11 finding: real Dhan rollingoption data
+        has ce_iv/pe_iv as raw percentage points (e.g. 11.47 meaning 11.47%),
+        confirmed live=0.122 vs backfilled=11.47 for the same instrument/day.
+        Without normalization, iv_derived/atm_options carry values ~100x
+        live's decimal scale, silently breaking any IV-rank comparison."""
+        atm_strike, step = 50000, 100
+        options = {"ATM": {
+            "ce": [{"ts": "2026-07-15T09:15:00", "ce_close": 100.0, "ce_iv": 11.47,
+                    "ce_oi": 1000, "strike": atm_strike}],
+            "pe": [{"ts": "2026-07-15T09:15:00", "pe_close": 90.0, "pe_iv": 15.59,
+                    "pe_oi": 900, "strike": atm_strike}],
+        }}
+        raw = {
+            "instrument": "BANKNIFTY", "trade_date": TRADE_DATE, "step": step,
+            "atm_strike": atm_strike, "index_bars": _index_bars(1), "vix_bars": [], "options": options,
+        }
+        snapshots = build_snapshots_from_dhan_data(raw)
+        atm = snapshots[0]["atm_options"]
+        self.assertAlmostEqual(atm["atm_ce_iv"], 0.1147, places=4)
+        self.assertAlmostEqual(atm["atm_pe_iv"], 0.1559, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()
