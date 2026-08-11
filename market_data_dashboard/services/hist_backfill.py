@@ -36,6 +36,7 @@ from snapshot_app.core.live_velocity_state import (
     LiveVelocityAccumulator,
     make_mongo_context_provider,
 )
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 
 _INGESTION = os.getenv("INGESTION_BASE", "http://ingestion_app:8004")
 _COLL = "phase1_market_snapshots_hist"
@@ -193,6 +194,11 @@ def enrich_day_ema_and_aggregates(snapshots: list[dict]) -> None:
     nz = close.replace(0.0, float("nan"))
     for span in (9, 21, 50):
         df[f"ema_{span}_slope"] = df[f"ema_{span}"].diff() / nz
+    # Session VWAP -- cumulative volume-weighted close from the day's open.
+    vol = df["volume"].astype(float).fillna(0.0)
+    cum_vol = vol.cumsum()
+    df["vwap"] = (close * vol).cumsum() / cum_vol.replace(0.0, float("nan"))
+    df["price_vs_vwap"] = (close - df["vwap"]) / df["vwap"].replace(0.0, float("nan"))
 
     oi_hist: list[dict] = []
     for i, s in enumerate(snapshots):
@@ -204,6 +210,17 @@ def enrich_day_ema_and_aggregates(snapshots: list[dict]) -> None:
                 v = df[col].iloc[i]
                 if not pd.isna(v):
                     s[col] = float(v)
+        # Same EMA/slope/vwap values, ALSO under futures_derived -- live's
+        # build_market_snapshot puts them there (mss3 block); the root-level
+        # copy above is kept as-is for build_feature_row's existing root-scalar
+        # fallback, this just stops futures_derived.ema_9 etc from being
+        # permanently missing against the live schema contract.
+        fd = s.setdefault("futures_derived", {})
+        for col in ("ema_9", "ema_21", "ema_50", "ema_9_slope", "ema_21_slope", "ema_50_slope", "vwap", "price_vs_vwap"):
+            if fd.get(col) is None:
+                v = df[col].iloc[i]
+                if not pd.isna(v):
+                    fd[col] = float(v)
         oi_map = {int(r["strike"]): (float(r.get("ce_oi") or 0), float(r.get("pe_oi") or 0))
                   for r in (s.get("strikes") or []) if r.get("strike")}
         oi_hist.append(oi_map)
@@ -214,12 +231,108 @@ def enrich_day_ema_and_aggregates(snapshots: list[dict]) -> None:
                     sorted(oi_map),
                     key=lambda S: sum(c * max(0, S - K) + q * max(0, K - S)
                                       for K, (c, q) in oi_map.items()))
+            fut_close = (s.get("futures_bar") or {}).get("fut_close")
+            max_pain = ca.get("max_pain")
+            if ca.get("distance_to_max_pain_pct") is None and fut_close and max_pain:
+                ca["distance_to_max_pain_pct"] = (float(fut_close) - float(max_pain)) / float(max_pain)
         atm = (s.get("chain_aggregates") or {}).get("atm_strike")
         if atm and i >= 30 and atm in oi_map and atm in oi_hist[i - 30]:
             ao = s.setdefault("atm_options", {})
             if ao.get("atm_ce_oi_change_30m") is None:
                 ao["atm_ce_oi_change_30m"] = oi_map[atm][0] - oi_hist[i - 30][atm][0]
                 ao["atm_pe_oi_change_30m"] = oi_map[atm][1] - oi_hist[i - 30][atm][1]
+
+
+def enrich_day_mtf_opening_iv(snapshots: list[dict]) -> None:
+    """Fill mtf_derived, opening_range, and the per-bar half of iv_derived
+    (iv_skew/iv_skew_dir/iv_expiry_type) -- the schema blocks the original
+    hist_backfill builder never produced at all (found 2026-08-11 auditing
+    why a month-long replay against phase1_market_snapshots_hist failed
+    market_snapshot_contract validation). Reuses the SAME pure functions the
+    live builder uses (snapshot_app.core.market_snapshot._compute_mtf_block,
+    _bars_since_first_true) so this can't drift from live's definition again.
+
+    Must run AFTER _enrich_for_seller() (needs session_context.is_expiry_day)
+    and idempotent -- only fills currently-None values. iv_percentile/
+    iv_regime and session_levels are filled by separate cross-day passes
+    (iv_percentile_pass, session_levels_pass) that need chronological state
+    across multiple days already in Mongo, not available at single-day
+    build time.
+    """
+    import pandas as pd
+
+    from snapshot_app.core.market_snapshot import _bars_since_first_true, _compute_mtf_block
+
+    if not snapshots:
+        return
+
+    df = pd.DataFrame({
+        "timestamp": [s.get("timestamp") for s in snapshots],
+        "open": [(s.get("futures_bar") or {}).get("fut_open") for s in snapshots],
+        "high": [(s.get("futures_bar") or {}).get("fut_high") for s in snapshots],
+        "low": [(s.get("futures_bar") or {}).get("fut_low") for s in snapshots],
+        "close": [(s.get("futures_bar") or {}).get("fut_close") for s in snapshots],
+        "volume": [(s.get("futures_bar") or {}).get("fut_volume") for s in snapshots],
+    })
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    for i, s in enumerate(snapshots):
+        mtf = s.setdefault("mtf_derived", {})
+        if mtf.get("mtf_aligned") is None:
+            mtf.update(_compute_mtf_block(df.iloc[: i + 1]))
+
+    # Opening range: fixed for the whole day once 9:15-9:30 has passed.
+    open_window = df[(df["timestamp"].dt.hour == 9) & (df["timestamp"].dt.minute >= 15) & (df["timestamp"].dt.minute < 30)]
+    orh = float(open_window["high"].max()) if len(open_window) else None
+    orl = float(open_window["low"].min()) if len(open_window) else None
+    or_width = (orh - orl) if (orh is not None and orl is not None) else None
+    breakout_up = (df["close"] > orh) if orh is not None else pd.Series(False, index=df.index)
+    breakout_down = (df["close"] < orl) if orl is not None else pd.Series(False, index=df.index)
+
+    for i, s in enumerate(snapshots):
+        orr = s.setdefault("opening_range", {})
+        if orr.get("orh") is not None:
+            continue  # already filled (idempotent re-run)
+        fut_close = (s.get("futures_bar") or {}).get("fut_close")
+        minutes_since_open = (s.get("session_context") or {}).get("minutes_since_open")
+        price_vs_orh = ((fut_close - orh) / orh) if (fut_close and orh) else None
+        price_vs_orl = ((fut_close - orl) / orl) if (fut_close and orl) else None
+        or_width_pct = (or_width / fut_close) if (or_width is not None and fut_close) else None
+        bars_since_up = _bars_since_first_true(breakout_up.iloc[: i + 1]) if orh is not None else None
+        bars_since_down = _bars_since_first_true(breakout_down.iloc[: i + 1]) if orl is not None else None
+        orr.update({
+            "orh": orh,
+            "orl": orl,
+            "or_width": or_width,
+            "or_width_pct": or_width_pct,
+            "price_vs_orh": price_vs_orh,
+            "price_vs_orl": price_vs_orl,
+            "opening_range_ready": bool(minutes_since_open is not None and minutes_since_open >= 15),
+            "orh_broken": bool(orh is not None and breakout_up.iloc[: i + 1].any()),
+            "orl_broken": bool(orl is not None and breakout_down.iloc[: i + 1].any()),
+            "bars_since_or_break_up": bars_since_up,
+            "bars_since_or_break_down": bars_since_down,
+        })
+
+        iv = s.setdefault("iv_derived", {})
+        if iv.get("iv_skew") is None:
+            atm = s.get("atm_options") or {}
+            ce_iv, pe_iv = atm.get("atm_ce_iv"), atm.get("atm_pe_iv")
+            iv_skew = (ce_iv - pe_iv) if (ce_iv is not None and pe_iv is not None) else None
+            if iv_skew is None:
+                iv_skew_dir = None
+            elif iv_skew < -0.005:
+                iv_skew_dir = "PUT_FEAR"
+            elif iv_skew > 0.005:
+                iv_skew_dir = "CALL_GREED"
+            else:
+                iv_skew_dir = "NEUTRAL"
+            is_expiry_day = (s.get("session_context") or {}).get("is_expiry_day")
+            iv.update({
+                "iv_skew": iv_skew,
+                "iv_skew_dir": iv_skew_dir,
+                "iv_expiry_type": "EXPIRY_DAY" if is_expiry_day else "NON_EXPIRY",
+            })
 
 
 def _quality_check(snapshots: list[dict]) -> tuple[bool, dict]:
@@ -305,7 +418,8 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
     if not raw.get("index_bars"):
         return 0  # holiday / no session
     snapshots = build_snapshots_from_dhan_data(raw)
-    _enrich_for_seller(snapshots, trade_date, instrument)
+    _enrich_for_seller(snapshots, trade_date, instrument)  # also runs enrich_day_ema_and_aggregates
+    enrich_day_mtf_opening_iv(snapshots)
     _inject_velocity(mongo_db, snapshots, instrument)
     ok, report = _quality_check(snapshots)
     report.update({"instrument": instrument, "trade_date": trade_date,
@@ -314,6 +428,24 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
         {"_id": f"{_coll_for(instrument)}:{trade_date}"}, {"$set": report}, upsert=True)
     if not ok:
         print(f"{trade_date} QUALITY_FAIL {report.get('fail')} — day NOT ingested", flush=True)
+        return -1
+    # Schema-contract gate (added 2026-08-11): the original builder silently
+    # produced snapshots missing 5+ top-level blocks and dozens of sub-fields
+    # for almost a month before anyone noticed, because nothing here ever
+    # called the SAME validator the live/replay paths already use. Values can
+    # legitimately be None (see per-field comments above/in
+    # enrich_day_mtf_opening_iv) -- this only checks required KEYS are
+    # present, matching validate_market_snapshot's own semantics.
+    schema_errors = 0
+    for s in snapshots:
+        rep = validate_market_snapshot(s, raise_on_error=False)
+        schema_errors += rep["error_count"]
+    if schema_errors:
+        print(f"{trade_date} SCHEMA_FAIL {schema_errors} field errors across "
+              f"{len(snapshots)} bars — day NOT ingested", flush=True)
+        mongo_db["dataset_manifests"].update_one(
+            {"_id": f"{_coll_for(instrument)}:{trade_date}"},
+            {"$set": {"schema_errors": schema_errors, "passed": False}})
         return -1
     coll = mongo_db[_coll_for(instrument)]
     coll.delete_many({"trade_date_ist": trade_date})  # idempotent per day
@@ -361,8 +493,19 @@ def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20, 
             sh, dq = sorted_hist[exp], hist[exp]
             if sh:  # percentile vs history BEFORE append (live order)
                 pct = 100.0 * bisect_right(sh, v) / len(sh)
+                # iv_regime thresholds mirror market_snapshot.py's live
+                # classification exactly (<40 CHEAP, <=75 NEUTRAL, else EXPENSIVE).
+                if pct < 40.0:
+                    regime = "CHEAP"
+                elif pct <= 75.0:
+                    regime = "NEUTRAL"
+                else:
+                    regime = "EXPENSIVE"
                 ops.append(UpdateOne({"_id": doc["_id"]},
-                                     {"$set": {"payload.snapshot.iv_derived.iv_percentile": round(pct, 1)}}))
+                                     {"$set": {
+                                         "payload.snapshot.iv_derived.iv_percentile": round(pct, 1),
+                                         "payload.snapshot.iv_derived.iv_regime": regime,
+                                     }}))
             if len(dq) == dq.maxlen:  # evict oldest from the sorted view too
                 old = dq[0]
                 i = bisect_right(sh, old) - 1
@@ -376,6 +519,76 @@ def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20, 
     print("IV_PASS_DONE", flush=True)
 
 
+def session_levels_pass(mongo_db, d_from: str, d_to: str, coll_name: str = _COLL) -> None:
+    """Second pass: fill session_levels (prev_day_high/low/close, week_high/
+    low, overnight_gap) -- needs the prior trading day(s)' OHLC, which isn't
+    available at single-day backfill_day() time. Mirrors iv_percentile_pass's
+    shape: walk days chronologically, carry a small trailing-day summary
+    forward, $set onto every bar of the current day. The FIRST day(s) in a
+    range have no prior day within it and are left None -- same cold-start
+    shape as the live IV deque's first warm-up window."""
+    from pymongo import UpdateOne
+
+    coll = mongo_db[coll_name]
+    days = sorted(coll.distinct("trade_date_ist", {"trade_date_ist": {"$gte": d_from, "$lte": d_to}}))
+    day_summaries: dict[str, dict] = {}  # trade_date -> {high, low, close}
+
+    for day in days:
+        docs = list(coll.find(
+            {"trade_date_ist": day},
+            {"payload.snapshot.futures_bar.fut_high": 1,
+             "payload.snapshot.futures_bar.fut_low": 1,
+             "payload.snapshot.futures_bar.fut_close": 1,
+             "payload.snapshot.futures_bar.fut_open": 1},
+            sort=[("timestamp", 1)],
+        ))
+        if not docs:
+            continue
+
+        prior_days = [d for d in days if d < day and d in day_summaries]
+        trailing = prior_days[-5:]
+        prev_day = prior_days[-1] if prior_days else None
+        prev = day_summaries.get(prev_day) if prev_day else None
+        week_high = max((day_summaries[d]["high"] for d in trailing if day_summaries[d]["high"] is not None), default=None)
+        week_low = min((day_summaries[d]["low"] for d in trailing if day_summaries[d]["low"] is not None), default=None)
+        today_open = None
+        for doc in docs:
+            fb = ((doc.get("payload") or {}).get("snapshot") or {}).get("futures_bar") or {}
+            if fb.get("fut_open") is not None:
+                today_open = fb["fut_open"]
+                break
+        overnight_gap = (
+            (today_open - prev["close"]) / prev["close"]
+            if (prev and prev.get("close") and today_open is not None) else None
+        )
+
+        ops = []
+        day_high = day_low = None
+        day_close = None
+        for doc in docs:
+            fb = ((doc.get("payload") or {}).get("snapshot") or {}).get("futures_bar") or {}
+            h, l, c = fb.get("fut_high"), fb.get("fut_low"), fb.get("fut_close")
+            if h is not None:
+                day_high = h if day_high is None else max(day_high, h)
+            if l is not None:
+                day_low = l if day_low is None else min(day_low, l)
+            if c is not None:
+                day_close = c
+            ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": {
+                "payload.snapshot.session_levels.prev_day_high": prev["high"] if prev else None,
+                "payload.snapshot.session_levels.prev_day_low": prev["low"] if prev else None,
+                "payload.snapshot.session_levels.prev_day_close": prev["close"] if prev else None,
+                "payload.snapshot.session_levels.week_high": week_high,
+                "payload.snapshot.session_levels.week_low": week_low,
+                "payload.snapshot.session_levels.overnight_gap": overnight_gap,
+            }}))
+        if ops:
+            coll.bulk_write(ops)
+        day_summaries[day] = {"high": day_high, "low": day_low, "close": day_close}
+        print(f"session_levels_pass {day} prev={prev_day}", flush=True)
+    print("SESSION_LEVELS_PASS_DONE", flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="d_from", required=True)
@@ -383,7 +596,9 @@ def main() -> int:
     ap.add_argument("--instrument", default="BANKNIFTY")
     ap.add_argument("--strikes", type=int, default=10)  # ingestion endpoint caps le=10 (ATM±10 = 21 strikes; seller legs live within ±5)
     ap.add_argument("--pause", type=float, default=20.0, help="seconds between days (rate limit)")
-    ap.add_argument("--iv-pass", action="store_true", help="only run the iv_percentile second pass")
+    ap.add_argument("--iv-pass", action="store_true", help="only run the iv_percentile + session_levels second passes")
+    ap.add_argument("--skip-second-passes", action="store_true",
+                     help="skip the automatic iv_percentile_pass/session_levels_pass at the end of a range backfill")
     args = ap.parse_args()
 
     from pymongo import MongoClient
@@ -393,6 +608,7 @@ def main() -> int:
 
     if args.iv_pass:
         iv_percentile_pass(db, args.d_from, args.d_to, coll_name=_coll_for(args.instrument))
+        session_levels_pass(db, args.d_from, args.d_to, coll_name=_coll_for(args.instrument))
         return 0
 
     d = date.fromisoformat(args.d_from)
@@ -416,6 +632,15 @@ def main() -> int:
             time.sleep(args.pause)
         d += timedelta(days=1)
     print(f"BACKFILL_DONE days={total_days} snapshots={total_snaps}", flush=True)
+    if not args.skip_second_passes and total_days > 0:
+        # iv_derived.iv_percentile/iv_regime and session_levels both need
+        # chronological state across multiple already-inserted days -- were
+        # previously opt-in only (--iv-pass) and not run by default, which is
+        # how the schema gap survived undetected. Now run automatically so a
+        # normal backfill run produces full-schema data without a manual
+        # second step to remember.
+        iv_percentile_pass(db, args.d_from, args.d_to, coll_name=_coll_for(args.instrument))
+        session_levels_pass(db, args.d_from, args.d_to, coll_name=_coll_for(args.instrument))
     return 0
 
 

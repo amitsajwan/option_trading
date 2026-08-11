@@ -478,6 +478,9 @@ class DhanDataService:
             data = (resp.get("data") or {}).get(side) or {}
             ts_list = data.get("timestamp") or []
             closes   = data.get("close")  or []
+            opens    = data.get("open")   or []
+            highs    = data.get("high")   or []
+            lows     = data.get("low")    or []
             ivs      = data.get("iv")     or []
             ois      = data.get("oi")     or []
             volumes  = data.get("volume") or []
@@ -489,6 +492,13 @@ class DhanDataService:
                 bars.append({
                     "ts": dt.isoformat(),
                     f"{side}_close":  closes[i]  if i < len(closes)  else None,
+                    # open/high/low were already requested (requiredData above)
+                    # but never extracted -- found 2026-08-11 auditing why
+                    # backfilled atm_options lacks OHLC. Not a Dhan data gap,
+                    # just discarded before this point.
+                    f"{side}_open":   opens[i]   if i < len(opens)   else None,
+                    f"{side}_high":   highs[i]   if i < len(highs)   else None,
+                    f"{side}_low":    lows[i]    if i < len(lows)    else None,
                     f"{side}_iv":     ivs[i]     if i < len(ivs)     else None,
                     f"{side}_oi":     ois[i]     if i < len(ois)     else None,
                     f"{side}_volume": volumes[i] if i < len(volumes) else None,

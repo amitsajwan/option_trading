@@ -15,9 +15,21 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from snapshot_app.core.market_snapshot import _ladder_aggregates
+from snapshot_app.core.market_snapshot_contract import REQUIRED_BLOCK_FIELDS
+
 logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+# Skeleton key sets for the blocks filled in by later enrichment passes
+# (enrich_day_mtf_opening_iv, session_levels_pass) -- sourced from the same
+# contract the validator checks against, so this can't silently drift from
+# it the way the original builder did.
+_MTF_KEYS = REQUIRED_BLOCK_FIELDS["mtf_derived"]
+_OPENING_RANGE_KEYS = REQUIRED_BLOCK_FIELDS["opening_range"]
+_IV_DERIVED_KEYS = REQUIRED_BLOCK_FIELDS["iv_derived"]
+_SESSION_LEVELS_KEYS = REQUIRED_BLOCK_FIELDS["session_levels"]
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -97,6 +109,10 @@ def build_snapshots_from_dhan_data(
     day_open: Optional[float] = None
     bars_seen = 0
     snapshots = []
+    prev_atm_ce_ltp: Optional[float] = None
+    prev_atm_pe_ltp: Optional[float] = None
+    prev_atm_ce_oi: Optional[float] = None
+    prev_atm_pe_oi: Optional[float] = None
 
     for i, bar in enumerate(index_bars):
         ts_str = bar.get("ts") or bar.get("start_at") or ""
@@ -138,10 +154,17 @@ def build_snapshots_from_dhan_data(
         atm_data = opt_ts.get("ATM", {})
         atm_ce_ltp = atm_data.get("ce_close")
         atm_pe_ltp = atm_data.get("pe_close")
+        atm_ce_open = atm_data.get("ce_open")
+        atm_ce_high = atm_data.get("ce_high")
+        atm_ce_low = atm_data.get("ce_low")
+        atm_pe_open = atm_data.get("pe_open")
+        atm_pe_high = atm_data.get("pe_high")
+        atm_pe_low = atm_data.get("pe_low")
         atm_ce_iv = atm_data.get("ce_iv")
         atm_pe_iv = atm_data.get("pe_iv")
         atm_ce_oi = atm_data.get("ce_oi")
         atm_pe_oi = atm_data.get("pe_oi")
+        atm_strike_this_bar = atm_data.get("strike")
 
         # Build strikes list for chain. 2026-07-10: rollingoption rungs are
         # RELATIVE to spot and roll intrabar — each bar carries its true
@@ -168,7 +191,8 @@ def build_snapshots_from_dhan_data(
             if sk is None:
                 continue
             row = by_strike.setdefault(int(sk), {})
-            for f in ("ce_close", "ce_oi", "ce_iv", "pe_close", "pe_oi", "pe_iv"):
+            for f in ("ce_close", "ce_open", "ce_high", "ce_low", "ce_oi", "ce_iv",
+                      "pe_close", "pe_open", "pe_high", "pe_low", "pe_oi", "pe_iv"):
                 if side_data.get(f) is not None:
                     row[f] = side_data[f]
         strikes = []
@@ -181,19 +205,57 @@ def build_snapshots_from_dhan_data(
             strikes.append({
                 "strike": sk,
                 "ce_ltp": side_data.get("ce_close"),
+                "ce_open": side_data.get("ce_open"),
+                "ce_high": side_data.get("ce_high"),
+                "ce_low": side_data.get("ce_low"),
                 "ce_oi": ce_oi,
                 "ce_iv": side_data.get("ce_iv"),
+                # Per-strike option volume: same unavailable-from-Dhan gap as
+                # the ATM/total volume fields above -- key present, value None.
+                "ce_volume": None,
                 "pe_ltp": side_data.get("pe_close"),
+                "pe_open": side_data.get("pe_open"),
+                "pe_high": side_data.get("pe_high"),
+                "pe_low": side_data.get("pe_low"),
                 "pe_oi": pe_oi,
                 "pe_iv": side_data.get("pe_iv"),
+                "pe_volume": None,
             })
 
         pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else None
         atm_iv = ((atm_ce_iv or 0) + (atm_pe_iv or 0)) / 2 if (atm_ce_iv and atm_pe_iv) else None
+        atm_strike_final = round(close / step) * step if close else None
+
+        # ce_oi_top_strike/pe_oi_top_strike: strike with the largest OI on each side.
+        ce_oi_top_strike = None
+        pe_oi_top_strike = None
+        if strikes:
+            ce_ranked = [s for s in strikes if s.get("ce_oi")]
+            pe_ranked = [s for s in strikes if s.get("pe_oi")]
+            if ce_ranked:
+                ce_oi_top_strike = max(ce_ranked, key=lambda s: s["ce_oi"])["strike"]
+            if pe_ranked:
+                pe_oi_top_strike = max(pe_ranked, key=lambda s: s["pe_oi"])["strike"]
+
+        atm_straddle_price = (atm_ce_ltp + atm_pe_ltp) if (atm_ce_ltp is not None and atm_pe_ltp is not None) else None
+        atm_straddle_pct = (atm_straddle_price / close) if (atm_straddle_price is not None and close) else None
+
+        atm_ce_return_1m = (
+            (atm_ce_ltp - prev_atm_ce_ltp) / prev_atm_ce_ltp
+            if (atm_ce_ltp is not None and prev_atm_ce_ltp) else None
+        )
+        atm_pe_return_1m = (
+            (atm_pe_ltp - prev_atm_pe_ltp) / prev_atm_pe_ltp
+            if (atm_pe_ltp is not None and prev_atm_pe_ltp) else None
+        )
+        atm_ce_oi_change_1m = (atm_ce_oi - prev_atm_ce_oi) if (atm_ce_oi is not None and prev_atm_ce_oi is not None) else None
+        atm_pe_oi_change_1m = (atm_pe_oi - prev_atm_pe_oi) if (atm_pe_oi is not None and prev_atm_pe_oi is not None) else None
 
         # Build the snapshot dict in runtime format
         snapshot = {
-            "schema_name": "SnapshotMLFlat",
+            # Was "SnapshotMLFlat" -- didn't match market_snapshot_contract's
+            # required "MarketSnapshot" (found 2026-08-11), failing every bar.
+            "schema_name": "MarketSnapshot",
             "schema_version": "3.0",
             "build_source": "dhan_replay",
             "build_run_id": f"replay-{trade_date}-{instrument}",
@@ -221,33 +283,111 @@ def build_snapshots_from_dhan_data(
                 "low": low,
                 "close": close,
                 "volume": volume,
+                # fut_* aliases -- SnapshotAccessor/market_snapshot_contract read
+                # these names, not the bare open/high/low/close/volume above
+                # (kept for backward compat with anything already reading them).
+                "fut_open": open_,
+                "fut_high": high,
+                "fut_low": low,
+                "fut_close": close,
+                "fut_volume": volume,
+                # Futures OI: not fetched by get_historical_day's index/futures
+                # bars today (index proxy has no OI concept) -- real gap, not
+                # a wiring miss like the option OHLC one was. Leave None.
+                "fut_oi": None,
             },
             "futures_derived": {
                 "fut_return_1m": _pct_chg(index_bars, i, 1),
+                "fut_return_3m": _pct_chg(index_bars, i, 3),
                 "fut_return_5m": _pct_chg(index_bars, i, 5),
                 "fut_return_15m": _pct_chg(index_bars, i, 15),
                 "fut_return_30m": _pct_chg(index_bars, i, 30),
                 "dist_from_day_high": (close - day_high) / day_high if (close and day_high and day_high > 0) else None,
                 "dist_from_day_low": (close - day_low) / day_low if (close and day_low and day_low > 0) else None,
                 "atr_ratio": _atr_ratio(index_bars, i, 14),
+                # atr_daily_percentile needs a multi-day ATR history (rolling
+                # percentile across sessions) -- not available at single-day
+                # build time, same shape as the cross-day passes below. None
+                # for now; a future atr_daily_percentile_pass could add it.
+                "atr_daily_percentile": None,
                 "vol_ratio": _vol_ratio(index_bars, i, 30),
+                # Same ratio as vol_ratio -- contract lists both names
+                # (futures_derived.vol_ratio vs fut_volume_ratio); live keeps
+                # them as one value under two keys, mirrored here.
+                "fut_volume_ratio": _vol_ratio(index_bars, i, 30),
                 "realized_vol_30m": _realized_vol_30m(index_bars, i, 30),
+                # Needs futures OI, which is unavailable (see futures_bar.fut_oi
+                # above) -- real gap, not fixable at this layer.
+                "fut_oi_change_30m": None,
+                # ema_9/21/50(+slopes)/vwap/price_vs_vwap filled by
+                # enrich_day_ema_and_aggregates / enrich_day_mtf_opening_iv
+                # after the full day is built (need day-level history).
+                "ema_9": None,
+                "ema_21": None,
+                "ema_50": None,
+                "ema_9_slope": None,
+                "ema_21_slope": None,
+                "ema_50_slope": None,
+                "vwap": None,
+                "price_vs_vwap": None,
             },
             "atm_options": {
+                "atm_ce_strike": atm_strike_this_bar or atm_strike_final,
+                "atm_pe_strike": atm_strike_this_bar or atm_strike_final,
+                "atm_ce_open": atm_ce_open,
+                "atm_ce_high": atm_ce_high,
+                "atm_ce_low": atm_ce_low,
                 "atm_ce_close": atm_ce_ltp,
-                "atm_pe_close": atm_pe_ltp,
-                "atm_ce_iv": atm_ce_iv,
-                "atm_pe_iv": atm_pe_iv,
+                "atm_ce_return_1m": atm_ce_return_1m,
+                # Dhan's rollingoption endpoint does not carry per-strike option
+                # VOLUME in practice (requested via requiredData, comes back
+                # empty) -- documented upstream limit, see chain_aggregates
+                # below. atm_ce_vol_ratio is therefore permanently unavailable.
+                "atm_ce_volume": None,
                 "atm_ce_oi": atm_ce_oi,
+                "atm_ce_oi_change_1m": atm_ce_oi_change_1m,
+                "atm_ce_oi_change_30m": None,  # filled by enrich_day_ema_and_aggregates
+                "atm_ce_iv": atm_ce_iv,
+                "atm_ce_vol_ratio": None,
+                "atm_pe_strike": atm_strike_this_bar or atm_strike_final,
+                "atm_pe_open": atm_pe_open,
+                "atm_pe_high": atm_pe_high,
+                "atm_pe_low": atm_pe_low,
+                "atm_pe_close": atm_pe_ltp,
+                "atm_pe_return_1m": atm_pe_return_1m,
+                "atm_pe_volume": None,
                 "atm_pe_oi": atm_pe_oi,
+                "atm_pe_oi_change_1m": atm_pe_oi_change_1m,
+                "atm_pe_oi_change_30m": None,  # filled by enrich_day_ema_and_aggregates
+                "atm_pe_iv": atm_pe_iv,
+                "atm_pe_vol_ratio": None,
+                "atm_ce_pe_price_diff": (
+                    (atm_ce_ltp - atm_pe_ltp) if (atm_ce_ltp is not None and atm_pe_ltp is not None) else None
+                ),
+                "atm_ce_pe_iv_diff": (atm_ce_iv - atm_pe_iv) if (atm_ce_iv and atm_pe_iv) else None,
+                "atm_oi_ratio": (atm_ce_oi / atm_pe_oi) if (atm_ce_oi and atm_pe_oi and atm_pe_oi > 0) else None,
+                # extra, non-contract fields kept for existing consumers:
                 "atm_iv": atm_iv,
                 "iv_skew": (atm_ce_iv - atm_pe_iv) if (atm_ce_iv and atm_pe_iv) else None,
             },
             "chain_aggregates": {
                 "pcr": pcr,
+                # pcr_change_5m/15m/30m need multi-bar PCR history -- not
+                # available at this per-bar construction point (mirrors the
+                # existing total_ce_volume/pe_volume gap below). Left None;
+                # key presence is all the schema contract requires.
                 "pcr_change_5m": None,
+                "pcr_change_15m": None,
+                "pcr_change_30m": None,
                 "atm_oi_ratio": (atm_ce_oi / atm_pe_oi) if (atm_ce_oi and atm_pe_oi and atm_pe_oi > 0) else None,
                 "near_atm_oi_ratio": None,
+                "strike_count": len(strikes),
+                "ce_oi_top_strike": ce_oi_top_strike,
+                "pe_oi_top_strike": pe_oi_top_strike,
+                "ce_pe_oi_diff": (total_ce_oi - total_pe_oi) if (total_ce_oi or total_pe_oi) else None,
+                # Filled by enrich_day_ema_and_aggregates once >=10 strikes are
+                # priced for this bar; placeholder so the key is always present.
+                "max_pain": None,
                 # Already summed above for pcr (2026-07-31 fix) -- omitting these
                 # left every OI-based velocity feature (vel_ce_oi_delta_*, etc.)
                 # permanently NaN, since live_velocity_state._extract_morning_row
@@ -260,20 +400,64 @@ def build_snapshots_from_dhan_data(
                 # returning None here, leaving ctx_gap_*/vol_spike_ratio NaN.
                 "total_ce_oi": total_ce_oi,
                 "total_pe_oi": total_pe_oi,
+                "total_ce_volume": None,
+                "total_pe_volume": None,
+                "ce_pe_volume_diff": None,
+                "atm_straddle_price": atm_straddle_price,
+                "atm_straddle_pct": atm_straddle_pct,
+                # distance_to_max_pain_pct needs max_pain, which is only known
+                # after the full day's OI history is seen -- filled by
+                # enrich_day_ema_and_aggregates once max_pain lands.
+                "distance_to_max_pain_pct": None,
                 # Required by chain_utils' far-OTM price proxy — without it, a
                 # strike that drifts off the chain can never be valued (froze a
                 # spread for 11 months in replay; 2026-07-10).
-                "atm_strike": round(close / step) * step if close else None,
+                "atm_strike": atm_strike_final,
             },
             "vix_context": {
                 "vix_current": vix_close,
+                "vix_prev_close": vix_prev,
                 "vix_intraday_chg": vix_chg,
                 "vix_regime": None,
                 "vix_spike_flag": False,
             },
             "strikes": strikes,
+            # ladder_aggregates is genuinely per-bar (only needs this bar's
+            # strikes + totals), so compute it directly with the live
+            # builder's own function -- one source of truth, no re-drift.
+            # total_ce_volume/total_pe_volume are unavailable (see
+            # chain_aggregates comment above), so the volume-based sub-fields
+            # correctly come back None; that's real, not a bug here.
+            "ladder_aggregates": _ladder_aggregates(
+                strikes,
+                atm_strike=atm_strike_final,
+                total_ce_oi=total_ce_oi,
+                total_pe_oi=total_pe_oi,
+                total_ce_volume=0.0,
+                total_pe_volume=0.0,
+            ),
+            # mtf_derived/opening_range need growing multi-bar history (5m/15m
+            # resampling, the day's opening 15 minutes) -- filled by
+            # enrich_day_mtf_opening_iv() after this whole day is built, same
+            # pattern as enrich_day_ema_and_aggregates. Skeleton here only
+            # so the schema contract's key-presence check is satisfied even
+            # before that pass runs.
+            "mtf_derived": dict.fromkeys(_MTF_KEYS),
+            "opening_range": dict.fromkeys(_OPENING_RANGE_KEYS),
+            # iv_skew/iv_skew_dir/iv_expiry_type need is_expiry_day, which
+            # _enrich_for_seller() sets AFTER this function returns; iv_percentile/
+            # iv_regime need the live cross-day rolling history (iv_percentile_pass).
+            # All filled downstream -- skeleton here for the same reason as above.
+            "iv_derived": dict.fromkeys(_IV_DERIVED_KEYS),
+            # session_levels needs the prior trading day(s)' data -- filled by
+            # session_levels_pass() once every day in the range is in Mongo.
+            "session_levels": dict.fromkeys(_SESSION_LEVELS_KEYS),
         }
         snapshots.append(snapshot)
+        prev_atm_ce_ltp = atm_ce_ltp if atm_ce_ltp is not None else prev_atm_ce_ltp
+        prev_atm_pe_ltp = atm_pe_ltp if atm_pe_ltp is not None else prev_atm_pe_ltp
+        prev_atm_ce_oi = atm_ce_oi if atm_ce_oi is not None else prev_atm_ce_oi
+        prev_atm_pe_oi = atm_pe_oi if atm_pe_oi is not None else prev_atm_pe_oi
 
     _progress(f"Built {len(snapshots)} snapshots")
     return snapshots
