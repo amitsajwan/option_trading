@@ -88,6 +88,31 @@ def test_mongo_context_loader_maps_inputs_to_outputs():
     assert avg_20d == pytest.approx((1000 + 1200 + 1700) / 3)  # mean of all prior 11:30 totals
 
 
+def test_mongo_context_loader_finds_prev_day_close_without_volume():
+    """Regression for the 2026-08-12 finding: backfilled/historical data
+    NEVER has option volume (Dhan's rollingoption endpoint doesn't provide
+    it), so total_ce_volume/total_pe_volume are always None there. The old
+    code only registered a date as a "candidate prior day" when BOTH volume
+    fields were present -- making prev_day_close (needed only for
+    ctx_gap_*/ctx_am_gap_from_yday, which don't need volume at all)
+    permanently None for every backfilled/replayed day, not just cold-start
+    warmup. A day with a real 11:30 bar but no volume must still yield a
+    real prev_day_close; only the volume-derived value should be None."""
+    docs = [
+        _snap_doc("20260611_1130"),  # 11:30 bar exists, but no ce/pe volume at all
+        _snap_doc("20260611_1530", fut_close=50500.0),
+    ]
+    db = _FakeDB({"phase1_market_snapshots": docs})
+
+    prev_close, prev_midday_vol, avg_20d = _load_context_from_mongo(
+        db, "2026-06-12", collections=("phase1_market_snapshots",)
+    )
+
+    assert prev_close == 50500.0
+    assert prev_midday_vol is None
+    assert avg_20d is None
+
+
 def test_mongo_context_loader_returns_none_when_no_history():
     db = _FakeDB({"phase1_market_snapshots": []})
     assert _load_context_from_mongo(db, "2026-06-12", collections=("phase1_market_snapshots",)) == (

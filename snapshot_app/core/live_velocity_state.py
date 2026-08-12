@@ -253,8 +253,19 @@ def _load_context_from_mongo(
             ca = _snap_block(doc, "chain_aggregates")
             ce = _num(ca.get("total_ce_volume"))
             pe = _num(ca.get("total_pe_volume"))
-            if ce is not None and pe is not None:
-                midday_by_date[date] = ce + pe
+            # Found 2026-08-12: this used to only register `date` as a
+            # candidate prior day when BOTH volume fields were present --
+            # but Dhan's rollingoption endpoint never returns per-strike
+            # option volume for historical/backfilled data (documented
+            # elsewhere, e.g. dhan_replay_builder.py), so total_ce_volume/
+            # total_pe_volume are ALWAYS None there. That made midday_by_date
+            # permanently empty for every backfilled day, which made
+            # prev_day_close (needed only for ctx_gap_*/ctx_am_gap_from_yday,
+            # NOT volume) silently NaN on every bar of every replay, not just
+            # cold-start warmup. A day with a real 11:30 bar is still a valid
+            # prev_day_close candidate even without volume -- only the
+            # volume-derived value itself should be None.
+            midday_by_date[date] = (ce + pe) if (ce is not None and pe is not None) else None
 
     if not midday_by_date:
         return None, None, None
