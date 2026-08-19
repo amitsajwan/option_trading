@@ -99,12 +99,18 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--label-pct", type=float, default=None,
                      help="Level-invariant move threshold, e.g. 0.0015=0.15%%. "
                           "Takes precedence over --label-pt if given.")
+    ap.add_argument("--exclude-features", default="",
+                     help="Comma-separated features to drop from ENTRY_FEATURES_V3 "
+                          "(ablation studies, e.g. --exclude-features vix_current). "
+                          "Output is NOT live-bundle-compatible when this is set.")
     args = ap.parse_args(argv)
     label_desc = f"{args.label_pct*100:.2f}% (level-invariant)" if args.label_pct is not None else f"{args.label_pt:.0f}pt (absolute)"
 
-    features = ENTRY_FEATURES_V3
-    log.info("Instrument=%s | Features=%d (ENTRY_FEATURES_V3, live-bundle-compatible)",
-              args.instrument, len(features))
+    excluded = {f.strip() for f in args.exclude_features.split(",") if f.strip()}
+    features = [f for f in ENTRY_FEATURES_V3 if f not in excluded]
+    log.info("Instrument=%s | Features=%d (ENTRY_FEATURES_V3%s)",
+              args.instrument, len(features),
+              f" minus {sorted(excluded)}" if excluded else ", live-bundle-compatible")
 
     log.info("Loading training view: %s", args.training_view)
     df = pd.read_csv(args.training_view, compression="infer")
