@@ -1125,16 +1125,24 @@ services:
       STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
-      ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
-      ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Namespaced 2026-08-20: these were all bare, shared with BankNifty's
+      # LIVE strategy_app container (no per-instrument override existed at
+      # all for the historical/replay stack -- found trying to replay NIFTY
+      # against data that isn't BankNifty's, which this container was
+      # silently defaulting to). _HISTORICAL overrides let an operator point
+      # this one isolated container at any instrument's model/config for a
+      # replay run without ever touching the bare vars BankNifty's live
+      # container reads.
+      ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH_HISTORICAL:-${ENTRY_ML_MODEL_PATH:-}}"
+      ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB_HISTORICAL:-${ENTRY_ML_MIN_PROB:-0.55}}"
       # Optional second entry model (e.g. 10-minute-horizon compression), combined
       # with model 1 via OR: the entry trigger fires when ANY model clears its own
       # threshold. Unset -> single-model behaviour (identical to before).
-      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
-      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
-      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
-      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-}"
-      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2_HISTORICAL:-${ENTRY_ML_MODEL_PATH_2:-}}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2_HISTORICAL:-${ENTRY_ML_MIN_PROB_2:-}}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES_HISTORICAL:-${ENTRY_ML_MAX_NAN_FEATURES:-}}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES_HISTORICAL:-${DIRECTION_ML_MAX_NAN_FEATURES:-}}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP_HISTORICAL:-${ENTRY_ALLOW_CHOP:-}}"
       ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
@@ -1149,13 +1157,13 @@ services:
       ENTRY_TIME_WINDOWS: "${ENTRY_TIME_WINDOWS:-}"
       ENTRY_REGIME_TAGGER: "${ENTRY_REGIME_TAGGER:-}"
       ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
-      DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
+      DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH_HISTORICAL:-${DIRECTION_ML_MODEL_PATH:-}}"
       DIRECTION_ML_MIN_MARGIN: "${DIRECTION_ML_MIN_MARGIN:-0}"
       DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
       # Direction-selection mode. Default composite (transparent multi-signal vote +
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
-      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE_HISTORICAL:-${ML_ENTRY_DIRECTION_MODE:-composite}}"
       ENTRY_MULTI_SIGNAL_MIN: "${ENTRY_MULTI_SIGNAL_MIN:-2.0}"
       ENTRY_SHADOW_SCORE_MIN: "${ENTRY_SHADOW_SCORE_MIN:-0}"
       OPPORTUNITY_GATE_ENABLED: "${OPPORTUNITY_GATE_ENABLED:-0}"
