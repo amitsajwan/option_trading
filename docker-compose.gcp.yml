@@ -447,7 +447,14 @@ services:
       ENTRY_REGIME_TAGGER: "${ENTRY_REGIME_TAGGER:-}"
       ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
       DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
-      DIRECTION_ML_MIN_MARGIN: "${DIRECTION_ML_MIN_MARGIN:-0}"
+      # Namespaced 2026-08-20: bare DIRECTION_ML_MIN_MARGIN is shared across
+      # 5 service blocks (strategy_app/_historical/_sim/_nifty and this one)
+      # -- BankNifty is the only instrument on ML-primary direction_ml mode
+      # where this gate actually matters, so a bare value here would have
+      # silently applied to unrelated containers too. Same "never reuse a
+      # shared unnamespaced switch" fix already applied to ENTRY_ALLOW_CHOP
+      # just above.
+      DIRECTION_ML_MIN_MARGIN: "${BANKNIFTY_DIRECTION_ML_MIN_MARGIN:-0}"
       DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
       DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-direction_ml}"
