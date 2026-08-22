@@ -31,7 +31,11 @@ services:
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
       SELLER_LIVE_ENABLED: "${SELLER_LIVE_ENABLED:-0}"
       SELLER_CONDOR_OFFSET: "${SELLER_CONDOR_OFFSET:-200}"
-      SELLER_IV_RANK_MIN: "${SELLER_IV_RANK_MIN:-30}"
+      # BankNifty-specific floor (2026-08-22): 19-month backtest (Nov'24-May'26)
+      # showed floor=15 vs floor=30 is P&L-flat (₹140,282 vs ₹141,058) and
+      # tail-risk-unchanged (worst -8312 vs -8180), while unlocking ~13% more
+      # trading days -- BankNifty had sat idle since 2026-07-27 at floor=30.
+      SELLER_IV_RANK_MIN: "${BANKNIFTY_SELLER_IV_RANK_MIN:-${SELLER_IV_RANK_MIN:-30}}"
       SELLER_SPREAD_WIDTH: "${SELLER_SPREAD_WIDTH:-300}"
       SELLER_TP_FRAC: "${SELLER_TP_FRAC:-0.50}"
       SELLER_STOP_MULT: "${SELLER_STOP_MULT:-2.0}"

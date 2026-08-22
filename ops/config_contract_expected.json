@@ -106,6 +106,7 @@
     },
     "option_trading-seller_app-1": {
       "instrument": "BANKNIFTY",
+      "_comment": "2026-08-22: SELLER_IV_RANK_MIN lowered 30->15 for BankNifty only (BANKNIFTY_SELLER_IV_RANK_MIN override) after it sat with zero trades since 2026-07-27 at floor=30. 19-month backtest showed floor=15 is P&L-flat and tail-risk-unchanged vs floor=30, just unlocks more trading days. NIFTY/FINNIFTY/SENSEX keep the shared default of 30.",
       "expect": {
         "EXECUTION_ADAPTER": "dhan",
         "SELLER_LIVE_ENABLED": "1",
@@ -117,7 +118,8 @@
         "SELLER_MAX_HOLD_DAYS": "10",
         "SELLER_STOP_CONFIRM_BARS": "2",
         "SELLER_QUIET_GATE_MODE": "entry",
-        "SELLER_QUIET_GATE_QUANTILE": "0.97"
+        "SELLER_QUIET_GATE_QUANTILE": "0.97",
+        "SELLER_IV_RANK_MIN": "15"
       },
       "require_nonempty": [
         "DHAN_CLIENT_ID",
