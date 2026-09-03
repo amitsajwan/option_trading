@@ -43,6 +43,13 @@ def _f(v) -> Optional[float]:
         return None
 
 
+def _has_activity(v) -> bool:
+    try:
+        return v is not None and float(v) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
     """Return a price-lookup function for the given snapshot.
 
@@ -50,14 +57,26 @@ def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
     in points (float) or None if completely unresolvable.
 
     Chain-shift fallback is applied automatically — callers do not need to handle it.
+
+    Liquidity check (2026-09-03): an "exact hit" strike with zero volume AND zero/null
+    OI is a stale/last-traded-ages-ago tick, not a live tradeable price — trusting it
+    caused a real incident (FINNIFTY seller, 2026-08-27: a frozen feed left illiquid
+    strikes quoting stale LTPs that violated basic OTM-strike monotonicity, e.g. a
+    strike 250pt OTM priced richer than one 100pt OTM; the resulting bogus spread value
+    tripped a false instant take_profit_50, 57x in one day with no re-entry cooldown to
+    stop the loop). An illiquid exact hit now falls through to the same far-OTM-proxy /
+    nearest-liquid-neighbor fallback already used for missing strikes, rather than being
+    trusted outright.
     """
-    # Build chain index: strike → (ce_ltp, pe_ltp)
-    chain: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
+    # Build chain index: strike → (ce_ltp, pe_ltp, ce_liquid, pe_liquid)
+    chain: Dict[int, Tuple[Optional[float], Optional[float], bool, bool]] = {}
     for row in (snap.get("strikes") or []):
         k = _f(row.get("strike"))
         if k is None:
             continue
-        chain[int(k)] = (_f(row.get("ce_ltp")), _f(row.get("pe_ltp")))
+        ce_liquid = _has_activity(row.get("ce_volume")) or _has_activity(row.get("ce_oi"))
+        pe_liquid = _has_activity(row.get("pe_volume")) or _has_activity(row.get("pe_oi"))
+        chain[int(k)] = (_f(row.get("ce_ltp")), _f(row.get("pe_ltp")), ce_liquid, pe_liquid)
 
     # ATM from chain_aggregates (needed to detect far-OTM fallback zone)
     ca = snap.get("chain_aggregates") or {}
@@ -67,11 +86,12 @@ def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
         atm = 0.0
 
     def price(ot: str, strike: int) -> Optional[float]:
-        # ── 1. exact hit ─────────────────────────────────────────────────────
-        pair = chain.get(strike)
-        if pair is not None:
-            v = pair[0] if ot == "CE" else pair[1]
-            if v is not None:
+        # ── 1. exact hit — only if backed by real trading activity ─────────────
+        entry = chain.get(strike)
+        if entry is not None:
+            v = entry[0] if ot == "CE" else entry[1]
+            liquid = entry[2] if ot == "CE" else entry[3]
+            if v is not None and liquid:
                 return v
 
         # ── 2. far-OTM proxy ─────────────────────────────────────────────────
@@ -80,14 +100,15 @@ def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
             if otm_dist > OTM_PROXY_THRESHOLD:
                 return OTM_PROXY_PRICE
 
-        # ── 3. nearest in-chain neighbor ─────────────────────────────────────
+        # ── 3. nearest in-chain neighbor with real trading activity ────────────
         best_price: Optional[float] = None
         best_dist: int = NEAREST_MAX_DIST + 1
-        for s, pair in chain.items():
+        for s, entry in chain.items():
             d = abs(s - strike)
             if d < best_dist:
-                v = pair[0] if ot == "CE" else pair[1]
-                if v is not None:
+                v = entry[0] if ot == "CE" else entry[1]
+                liquid = entry[2] if ot == "CE" else entry[3]
+                if v is not None and liquid:
                     best_price, best_dist = v, d
         if best_price is not None:
             return best_price
