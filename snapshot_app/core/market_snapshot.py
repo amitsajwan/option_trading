@@ -2195,21 +2195,22 @@ class LiveMarketSnapshotBuilder:
         return {}
 
     def fetch_live_vix(self) -> Optional[float]:
-        candidates = [
-            "INDIA VIX",
-            "INDIAVIX",
-            "NIFTYVIX",
-            "VIX",
-        ]
-        for symbol in candidates:
-            try:
-                payload = self._get_json(f"{self.market_api_base}/api/v1/market/tick/{symbol}")
-                if isinstance(payload, dict):
-                    price = _nullable_float(payload.get("last_price"))
-                    if price is not None and price > 0:
-                        return price
-            except Exception:
-                continue
+        # 2026-09-03: this used to try 4 candidate symbol strings in sequence
+        # ("INDIA VIX", "INDIAVIX", "NIFTYVIX", "VIX"), but ingestion_app's
+        # get_tick() already normalizes any string containing "VIX" to the same
+        # underlying Dhan IDX_VIX security lookup -- the candidates were never
+        # functionally different, just up to 4x the Dhan calls (and retry
+        # backoff) for one quote. Contributed to a NIFTY ingestion rate-limit
+        # squeeze that dropped market data for the last ~35min of 2026-09-03's
+        # session. One call is sufficient.
+        try:
+            payload = self._get_json(f"{self.market_api_base}/api/v1/market/tick/INDIA VIX")
+            if isinstance(payload, dict):
+                price = _nullable_float(payload.get("last_price"))
+                if price is not None and price > 0:
+                    return price
+        except Exception:
+            pass
         return None
 
     def build_snapshot(
