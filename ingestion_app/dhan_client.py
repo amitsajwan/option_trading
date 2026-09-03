@@ -342,7 +342,19 @@ class ScripMaster:
         candidates = []
         for row in self._futures:
             name = str(row.get("SEM_CUSTOM_SYMBOL") or row.get("SEM_TRADING_SYMBOL") or "").upper()
+            # A bare startswith() also matches unrelated contracts that share the
+            # prefix (2026-09-03 incident: underlying="NIFTY" matched "NIFTYFPI SEP
+            # FUT" and "NIFTYNXT50 SEP FUT" -- different instruments entirely, not
+            # NIFTY 50 index futures. Since those happened to share NIFTY's nearest
+            # expiry date and sorted first, the wrong contract's price silently fed
+            # NIFTY's ATM-strike calculation for weeks. Require a word boundary
+            # (space/hyphen/digit/end) right after the underlying name so "NIFTY"
+            # only matches "NIFTY SEP FUT" / "NIFTY-Sep2026-FUT", not "NIFTYFPI..."
+            # or "NIFTYNXT50...".
             if not name.startswith(underlying_u):
+                continue
+            rest = name[len(underlying_u):]
+            if rest and not (rest[0].isspace() or rest[0] in "-0123456789"):
                 continue
             exp_str = str(row.get("SEM_EXPIRY_DATE") or "").strip()
             try:
