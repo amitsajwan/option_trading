@@ -74,11 +74,11 @@
     },
     "option_trading-strategy_app_sensex-1": {
       "instrument": "SENSEX",
-      "_comment": "2026-08-10: cold-start v1 model, holdout AUC 0.6845 (fails formal >=0.70 gate) but real separation/calibration -- threshold 0.70 picked from a genuine quantization cliff (0.7-0.8 bin: 75% precision, n=8; 0.6-0.7 bin: 0% precision, n=6). Small holdout sample -- RISK_LIVE_MIN_GRADE=GOOD is the compensating control. Launching buyer-side paper mode only; retrain once more live data accumulates.",
+      "_comment": "2026-09-05: retrained on a fresh full re-backfill (Jan-Aug 2026, post ctx_gap_pct/iv_percentile fix) -- v2 holdout AUC 0.7051, ship_gates ALL_PASS (first SENSEX model to clear every gate, v1 failed auc>=0.70). Capital-weighted engine backtest (Feb-Aug 2026, real rupee P&L) confirmed it beats v1 in practice too: +Rs9,864/+2.02% return @thr=0.50 vs v1's +Rs4,590/+1.50% @thr=0.70 (v1's own threshold was picked for a different, since-superseded prob distribution). max_nan_features raised 2->3 to match v2's own training-time value; NOTE the capital-weighted backtest itself ran with no NaN gate at all (a methodology gap discovered post-backtest) so live behavior during the 09:15-09:45 warmup window should be watched for artifact trades before trusting this threshold long-term. User-approved deploy, still paper mode (EXECUTION_ADAPTER=paper) -- zero real-money exposure. v1 stays in repo unreferenced for rollback.",
       "expect": {
-        "ENTRY_ML_MODEL_PATH": "/app/models/sensex_entry_015pct_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.70",
-        "ENTRY_ML_MAX_NAN_FEATURES": "2",
+        "ENTRY_ML_MODEL_PATH": "/app/models/sensex_entry_015pct_v2.joblib",
+        "ENTRY_ML_MIN_PROB": "0.50",
+        "ENTRY_ML_MAX_NAN_FEATURES": "3",
         "SENSEX_LOT_SIZE": "20",
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
