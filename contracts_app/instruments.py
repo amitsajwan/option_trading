@@ -105,6 +105,23 @@ INSTRUMENTS: Dict[str, InstrumentSpec] = {
         expiry_cadence="weekly",    # near-term weeklies listed, same shape as NIFTY
         fno_segment="BSE_FNO",
     ),
+    "MIDCPNIFTY": InstrumentSpec(
+        # 5th instrument, first onboarded after SENSEX. NSE, same segment as
+        # BANKNIFTY/NIFTY/FINNIFTY -- no new fno_segment plumbing needed.
+        # Confirmed live 2026-09-07 via Dhan scrip master (index row
+        # security_id=442, SEM_CUSTOM_SYMBOL="Nifty Midcap Select", segment
+        # "I"; FUTIDX/OPTIDX rows all lot_units=120.0, exchange NSE). No
+        # sibling-family string-prefix trap found (unlike SENSEX/SENSEX50)
+        # -- every row containing "MIDCPNIFTY" belongs to this one
+        # instrument. Only 3 expiries listed (Sep/Oct/Nov 2026), ~monthly
+        # cadence like FINNIFTY -- no weeklies. Near-ATM listed strikes are
+        # 25 apart (e.g. 14625, 14650, 14675...).
+        name="MIDCPNIFTY",
+        index_security_id="442",
+        lot_size=120,
+        strike_step=25,
+        expiry_cadence="monthly",
+    ),
 }
 
 # The primary instrument is re-exported from sim_namespace so callers have one

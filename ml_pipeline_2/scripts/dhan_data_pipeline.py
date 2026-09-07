@@ -141,6 +141,19 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         strike_step=100,
         expiry_cadence="weekly",
     ),
+    "MIDCPNIFTY": InstrumentConfig(
+        # 5th instrument. NSE, same segment as BANKNIFTY/NIFTY/FINNIFTY -- see
+        # contracts_app/instruments.py's MIDCPNIFTY entry for the full record
+        # (security_id, no sibling-family collision found, only 3 expiries
+        # listed = monthly cadence). Confirmed live 2026-09-07.
+        name="MIDCPNIFTY",
+        index_security_id="442",
+        fno_segment="NSE_FNO",
+        index_segment="IDX_I",
+        lot_size=120,
+        strike_step=25,
+        expiry_cadence="monthly",
+    ),
 }
 
 # ── Dhan API Client ───────────────────────────────────────────────────────────
@@ -323,7 +336,13 @@ def _monthly_futures_contracts(
     # 2026-08-07: 2026-08-27/09-24/10-29 futures all land on Thursday). A
     # hardcoded constant here (not dynamically derived) matches the existing
     # scoping decision above; add a row here if NSE/BSE change their day again.
-    _MONTHLY_WEEKDAY = {"BANKNIFTY": 1, "NIFTY": 1, "FINNIFTY": 1, "SENSEX": 3}
+    # MIDCPNIFTY (added 2026-09-07): NSE, same Tuesday cadence as the other
+    # NSE instruments -- confirmed 2/3 listed expiries land on Tuesday
+    # (2026-09-29, 2026-10-27); the third (2026-11-23) is a Monday, most
+    # likely a single holiday-adjusted shift (nse_holidays.json doesn't yet
+    # cover Nov 2026 to confirm) rather than a cadence change -- same
+    # single-exception tolerance already accepted for the other instruments.
+    _MONTHLY_WEEKDAY = {"BANKNIFTY": 1, "NIFTY": 1, "FINNIFTY": 1, "SENSEX": 3, "MIDCPNIFTY": 1}
     expected_weekday = _MONTHLY_WEEKDAY.get(instrument_name.upper(), 1)
     fut["_is_monthly"] = fut["_expiry"].apply(
         lambda d: (d is not None and not pd.isna(d)

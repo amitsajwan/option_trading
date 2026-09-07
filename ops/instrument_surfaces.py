@@ -223,6 +223,13 @@ CONFIG_CONTRACT_DEFERRED: dict[str, str] = {
     # SENSEX removed 2026-08-10: v1 entry model trained, real config_contract
     # entries added for strategy_app_sensex/execution_app_sensex/
     # seller_app_sensex in the same commit -- see docs/ONBOARDING_INSTRUMENT.md.
+    "MIDCPNIFTY": "2026-09-07: registry+compose wired, no trained entry model "
+        "yet (ENTRY_ML_MODEL_PATH points at a placeholder path that doesn't "
+        "exist -- see docker-compose.gcp.yml's strategy_app_midcpnifty block). "
+        "strategy_app_midcpnifty/execution_app_midcpnifty/seller_app_midcpnifty "
+        "are not started. Remove this entry and add the 3 real "
+        "config_contract_expected.json blocks in the same commit that lands "
+        "a cold-start model and actually starts those containers.",
 }
 
 

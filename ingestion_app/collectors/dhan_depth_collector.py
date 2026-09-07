@@ -74,8 +74,8 @@ logger = logging.getLogger(__name__)
 
 _SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _DHAN_BASE = "https://api.dhan.co/v2"
-_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13", "FINNIFTY": "27", "SENSEX": "51"}
-_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50, "SENSEX": 100}
+_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13", "FINNIFTY": "27", "SENSEX": "51", "MIDCPNIFTY": "442"}
+_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50, "SENSEX": 100, "MIDCPNIFTY": 25}
 
 
 # ── Scrip master: (expiry, strike, CE/PE) -> security_id ───────────────────
