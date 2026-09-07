@@ -134,6 +134,13 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
         "NIFTY": nifty_weekly_expiry,
         "FINNIFTY": bn_monthly_expiry,
         "SENSEX": sensex_expiry,
+        # MIDCPNIFTY confirmed live 2026-09-07: NSE, monthly-only cadence,
+        # 2/3 listed expiries land on Tuesday (the 3rd, 2026-11-23, is a
+        # Monday -- likely a single holiday shift) -- same post-Sep-2025
+        # NSE Tuesday pattern bn_monthly_expiry already encodes for
+        # BANKNIFTY/FINNIFTY. Reused because the ACTUAL weekday matches, not
+        # because the cadence matches (see the trap this dict guards against).
+        "MIDCPNIFTY": bn_monthly_expiry,
     }
     inst_u = instrument.strip().upper()
     if inst_u not in _EXPIRY_FN:

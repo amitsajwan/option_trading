@@ -402,6 +402,17 @@ def surface_checks(instrument: str) -> list[tuple[str, bool, str]]:
         '_LOT_SIZE"' in consts and 'f"{inst}' in consts,
         "resolve_lot_size() lost its generic {INST}_LOT_SIZE branch")
 
+    # 13. hist_backfill's own expiry-function registry (found missing during
+    # MIDCPNIFTY onboarding 2026-09-07 -- a real backfill smoke-test failed
+    # with "no expiry function registered", a surface this checklist didn't
+    # cover until now). Deliberately fail-loud, never cadence-matched -- see
+    # the comment in _enrich_for_seller for why (FINNIFTY/NIFTY WEEKLY-vs-
+    # MONTHLY mixup, 2026-08-04).
+    hist_backfill = _read("market_data_dashboard/services/hist_backfill.py")
+    add("hist_backfill._EXPIRY_FN", f'"{inst}": ' in hist_backfill,
+        f'add "{inst}": <the right expiry fn, confirmed against a live scrip-master pull, '
+        f'never guessed> to _EXPIRY_FN in market_data_dashboard/services/hist_backfill.py')
+
     return checks
 
 
