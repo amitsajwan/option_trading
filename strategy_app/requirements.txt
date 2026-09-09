@@ -6,3 +6,9 @@ pandas>=2,<3
 scikit-learn==1.7.2
 lightgbm>=4,<5
 google-cloud-storage>=2.0,<3
+# ml_pipeline_2/pipeline/* runs its train+backtest+registry workflow inside
+# this image (see the ml-pipeline skill's Deployment section) -- pymongo
+# for the results registry, optuna for train_entry_dhan_v3's HPO. Neither
+# was needed before that pipeline existed; added 2026-09-09.
+pymongo>=4,<5
+optuna>=4,<5

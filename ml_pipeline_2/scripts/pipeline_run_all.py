@@ -81,8 +81,15 @@ def _real_train_fn(*, instrument: str, data_dir: str, output: str,
     import joblib
     from ml_pipeline_2.scripts.train_entry_dhan_v3 import main as train_main
 
+    # data_dir in the config can point at either real data source
+    # train_entry_dhan_v3 supports -- a per-day indicator parquet dir, or a
+    # pre-built training_view_<instrument>.csv.gz (the one actually in use
+    # for BankNifty/NIFTY/FINNIFTY/SENSEX as of 2026-09-09; see that
+    # script's module docstring). Dispatch on the file extension so the
+    # config doesn't need a separate field for it.
+    data_flag = "--training-view-csv" if data_dir.endswith((".csv", ".csv.gz")) else "--data-dir"
     argv = [
-        "--instrument", instrument, "--data-dir", data_dir, "--output", output,
+        "--instrument", instrument, data_flag, data_dir, "--output", output,
         "--train-start", train_start, "--train-end", train_end,
         "--valid-start", valid_start, "--valid-end", valid_end,
         "--holdout-start", holdout_start, "--holdout-end", holdout_end,

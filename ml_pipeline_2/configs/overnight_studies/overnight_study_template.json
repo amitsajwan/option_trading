@@ -1,8 +1,8 @@
 [
   {
     "instrument": "BANKNIFTY",
-    "_notes": "data_dir verified against ops/gcp/run_retrain_v3.sh and models/dhan_entry_rarelabel_5min_v1.report.json (real 2026-09 retrain). Windows match that same real retrain. label_horizon_min=5 per instrument_config.py -- train_entry_dhan_v3 uses a fixed 15min horizon internally via --label-horizon-min, override if BankNifty's 5min convention should apply here.",
-    "data_dir": ".data/dhan_pipeline/indicators/banknifty",
+    "_notes": "VERIFIED 2026-09-09 directly on the VM: .run/training_view/training_view_banknifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (428 days, 60 features, source_collection=phase1_market_snapshots_hist). Windows below fit entirely inside that range.",
+    "data_dir": ".run/training_view/training_view_banknifty.csv.gz",
     "output_dir": ".run/overnight_study/banknifty",
     "candidates": [
       {
@@ -25,8 +25,8 @@
   },
   {
     "instrument": "NIFTY",
-    "_notes": "Same window convention as BankNifty. NIFTY_ENTRY_ML_MODEL_PATH points at nifty_entry_bundle_v2.joblib per .env.compose -- confirm data_dir/nifty has coverage through train_end before running.",
-    "data_dir": ".data/dhan_pipeline/indicators/nifty",
+    "_notes": "VERIFIED 2026-09-09: .run/training_view/training_view_nifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (428 days, 60 features, source_collection=phase1_market_snapshots_hist_nifty). Same windows as BankNifty.",
+    "data_dir": ".run/training_view/training_view_nifty.csv.gz",
     "output_dir": ".run/overnight_study/nifty",
     "candidates": [
       {
@@ -49,13 +49,13 @@
   },
   {
     "instrument": "FINNIFTY",
-    "_notes": "VERIFY data_dir/date coverage before running -- FINNIFTY was onboarded later than BankNifty/NIFTY (project_finnifty_live_and_guardrails_2026-08-04.md), may not have data back to 2024-11-01. Also: prior finding is that FINNIFTY has no edge at ANY threshold (project_finnifty_dormancy_root_cause_2026-09-05.md) -- this run is unlikely to change that verdict without the untapped-feature-signal-gap fix; included for completeness/audit trail, not because a win is expected.",
-    "data_dir": ".data/dhan_pipeline/indicators/finnifty",
+    "_notes": "VERIFIED 2026-09-09: .run/training_view/training_view_finnifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (359 days -- fewer than BankNifty/NIFTY's 428, some gaps, but the date range matches). Prior finding: FINNIFTY has no edge at ANY threshold (project_finnifty_dormancy_root_cause_2026-09-05.md) -- included for completeness/audit trail, not because a win is expected.",
+    "data_dir": ".run/training_view/training_view_finnifty.csv.gz",
     "output_dir": ".run/overnight_study/finnifty",
     "candidates": [
       {
         "candidate_id": "FINNIFTY_010pct", "label_pct": 0.10,
-        "train_start": "2025-01-01", "train_end": "2026-06-15",
+        "train_start": "2024-11-01", "train_end": "2026-06-15",
         "valid_start": "2026-06-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
@@ -65,32 +65,16 @@
   },
   {
     "instrument": "SENSEX",
-    "_notes": "VERIFY data_dir/date coverage before running -- SENSEX onboarded 2026-08-07, train_start below is a placeholder guess, not verified. v2 is already live-paper (project_sensex_onboarding_2026-08-07.md); this run is a fresh candidate search, not a re-verification of v2.",
-    "data_dir": ".data/dhan_pipeline/indicators/sensex",
+    "_notes": "VERIFIED 2026-09-09: .run/training_view_sensex/training_view_sensex.manifest.json (note the DIFFERENT directory name -- not under .run/training_view/ like the other three) confirms coverage is ONLY 2026-01-01..2026-08-06 (146 days) -- much shorter/more recent than the others. Windows below are shrunk to fit; do not copy BankNifty's dates here.",
+    "data_dir": ".run/training_view_sensex/training_view_sensex.csv.gz",
     "output_dir": ".run/overnight_study/sensex",
     "candidates": [
       {
         "candidate_id": "SENSEX_010pct", "label_pct": 0.10,
-        "train_start": "2025-06-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
-        "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
-        "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
-        "n_trials": 60
-      }
-    ]
-  },
-  {
-    "instrument": "MIDCPNIFTY",
-    "_notes": "VERIFY data_dir/date coverage before running -- MIDCPNIFTY onboarded 2026-09-07 (project_midcpnifty_onboarding_2026-09-07.md), cold-start, train_start below is a placeholder guess, not verified. Existing model has holdout AUC 0.639 but ship_gates fail (not degenerate) -- a fresh candidate search is reasonable Phase-3 work.",
-    "data_dir": ".data/dhan_pipeline/indicators/midcpnifty",
-    "output_dir": ".run/overnight_study/midcpnifty",
-    "candidates": [
-      {
-        "candidate_id": "MIDCPNIFTY_010pct", "label_pct": 0.10,
-        "train_start": "2025-06-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
-        "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
-        "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
+        "train_start": "2026-01-01", "train_end": "2026-06-30",
+        "valid_start": "2026-07-01", "valid_end": "2026-07-15",
+        "holdout_start": "2026-07-16", "holdout_end": "2026-08-06",
+        "backtest_from": "2026-08-10", "backtest_to": "2026-09-03",
         "n_trials": 60
       }
     ]

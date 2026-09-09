@@ -31,13 +31,22 @@ Usage (run on ML VM):
     # A label-target-grid candidate (percent-of-price move, instrument- and
     # price-level-agnostic -- matches ml_pipeline_2.pipeline.candidates.
     # CandidateConfig.label_pct). Omitting --label-pct/--label-pt keeps the
-    # original fixed 100pt/15min default for backward compatibility.
+    # original fixed 100pt/15min default for backward compatibility. Uses
+    # --training-view-csv (the format actually in current use, see below)
+    # rather than --data-dir.
     python -m ml_pipeline_2.scripts.train_entry_dhan_v3 \\
         --instrument NIFTY --label-pct 0.10 --label-horizon-min 15 \\
-        --data-dir .data/dhan_pipeline/indicators \\
+        --training-view-csv .run/training_view/training_view_nifty.csv.gz \\
         --output models/nifty_010pct.joblib \\
         --train-start 2024-11-01 --train-end 2026-04-30 \\
         --holdout-start 2026-05-01 --holdout-end 2026-06-30
+
+--data-dir (per-day indicator parquet, built by dhan_data_pipeline.py's
+build step) and --training-view-csv (a pre-built training_view_<name>.csv.gz,
+built directly from Mongo) are mutually exclusive alternative data sources.
+Verify which one your instrument actually has before choosing -- as of
+2026-09-09, BankNifty/NIFTY/FINNIFTY/SENSEX each had a real, current
+training_view CSV but NO --data-dir data at all.
 """
 from __future__ import annotations
 
@@ -158,6 +167,34 @@ def load_indicators(data_dir: Path, instrument: str,
     data = data[(data["trade_date"] >= start) & (data["trade_date"] <= end)]
     log.info("Loaded %d rows for %s between %s and %s", len(data), inst, start, end)
     return data
+
+
+def load_training_view_csv(path: Path, start: str, end: str) -> pd.DataFrame:
+    """Load a pre-built training_view_<instrument>.csv.gz -- the ACTUAL
+    data format in current real-world use, discovered 2026-09-09 while
+    wiring the overnight study runner: none of BankNifty/NIFTY/FINNIFTY/
+    SENSEX had any `.data/dhan_pipeline/indicators` data on the VM at all
+    (that raw-parquet convention `load_indicators()` above expects turned
+    out to be stale/aspirational), but each already had a real, current
+    `.run/training_view*/training_view_<name>.csv.gz` built directly from
+    Mongo (`phase1_market_snapshots_hist*`) with the exact ENTRY_FEATURES_V3
+    columns plus `trade_date`,`time`,`fut_close` -- just missing a combined
+    `timestamp` column, which this function constructs.
+    """
+    df = pd.read_csv(path, compression="infer", low_memory=False)
+    if "trade_date" not in df.columns:
+        raise ValueError(f"{path}: missing trade_date column")
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    if "timestamp" not in df.columns:
+        if "time" not in df.columns:
+            raise ValueError(f"{path}: has neither 'timestamp' nor 'time' column to build one from")
+        df["timestamp"] = pd.to_datetime(
+            df["trade_date"].dt.strftime("%Y-%m-%d") + " " + df["time"].astype(str),
+            errors="coerce",
+        )
+    df = df[(df["trade_date"] >= start) & (df["trade_date"] <= end)]
+    log.info("Loaded %d rows from training_view %s between %s and %s", len(df), path, start, end)
+    return df
 
 
 def add_labels(
@@ -352,7 +389,13 @@ def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instrument", required=True, choices=known_instruments())
-    ap.add_argument("--data-dir",  required=True, help="Path to dhan_data_pipeline indicators dir")
+    data_group = ap.add_mutually_exclusive_group(required=True)
+    data_group.add_argument("--data-dir", help="Path to dhan_data_pipeline per-day indicator parquet dir "
+                                                "(legacy convention -- verify it actually has data for your "
+                                                "instrument before relying on it; as of 2026-09-09 none did)")
+    data_group.add_argument("--training-view-csv",
+                             help="Path to a pre-built training_view_<instrument>.csv.gz -- the format actually "
+                                  "in current use (e.g. .run/training_view/training_view_banknifty.csv.gz)")
     ap.add_argument("--output",    required=True, help="Output bundle path (.joblib)")
     ap.add_argument("--train-start",   default="2024-11-01")
     ap.add_argument("--train-end",     default="2026-03-31")
@@ -388,12 +431,13 @@ def main(argv: List[str] | None = None) -> int:
              args.train_start, args.train_end, args.valid_start, args.valid_end,
              args.holdout_start, args.holdout_end)
 
-    data_dir = Path(args.data_dir).resolve()
-
     # ── Load all data ──────────────────────────────────────────────────────────
     all_start = args.train_start
     all_end   = args.holdout_end
-    df = load_indicators(data_dir, args.instrument, all_start, all_end)
+    if args.training_view_csv:
+        df = load_training_view_csv(Path(args.training_view_csv).resolve(), all_start, all_end)
+    else:
+        df = load_indicators(Path(args.data_dir).resolve(), args.instrument, all_start, all_end)
     df = normalise_vix(df)
     df = add_labels(df, label_pct=args.label_pct, label_pt=args.label_pt, horizon_min=args.label_horizon_min)
     label_def = (
