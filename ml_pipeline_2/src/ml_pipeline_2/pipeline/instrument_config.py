@@ -29,6 +29,8 @@ class InstrumentMLConfig:
     default_label_pct: float = 0.0015  # the "0.15%" convention every instrument's live model uses today
     mongo_hist_collection: Optional[str] = None  # phase1_market_snapshots_hist{,_<name>} -- None = derive from name
     training_view_path: Optional[str] = None  # cached training_view_<name>.csv.gz on the VM, if one exists
+    parquet_base: Optional[str] = None  # SIM-harness snapshot parquet root for backtesting -- see parquet_base_notes
+    parquet_base_notes: str = ""  # freshness/naming caveats for parquet_base -- read before trusting a backtest
     notes: str = ""
 
 
@@ -42,6 +44,11 @@ INSTRUMENT_ML_CONFIGS: dict[str, InstrumentMLConfig] = {
         live_entry_min_prob=0.25,
         mongo_hist_collection="phase1_market_snapshots_hist",  # bare, no _banknifty suffix (primary instrument)
         training_view_path="/opt/option_trading/.run/training_view/training_view_banknifty.csv.gz",
+        parquet_base="/app/.data/ml_pipeline/parquet_data_banknifty",
+        parquet_base_notes="STALE as of 2026-09-09: latest trade_date is 2026-07-31 (frozen at this "
+                            "instrument's training holdout_end, never refreshed since) -- confirmed via "
+                            "instrument field BANKNIFTYFUT. Cannot backtest anything after 2026-07-31 "
+                            "until a fresh Mongo->parquet export is run for this instrument.",
         notes="Live real money. Deployed as a trial 2026-09-04 despite a mixed backtest at the time "
               "(user's explicit call). Label-target study 2026-09-08 found 0.10%@thr=0.3 a promising "
               "but UNCONFIRMED candidate -- see project_backtest_insample_contamination_finding_2026-09-09.md.",
@@ -53,6 +60,11 @@ INSTRUMENT_ML_CONFIGS: dict[str, InstrumentMLConfig] = {
         live_model_path="/app/models/nifty_entry_015pct_v2.joblib",
         live_entry_min_prob=0.5,
         training_view_path="/opt/option_trading/.run/training_view/training_view_nifty.csv.gz",
+        parquet_base="/app/.data/ml_pipeline/parquet_data",
+        parquet_base_notes="Confirmed 2026-09-09: this is the ONLY current/live-updated archive found "
+                            "(latest trade_date 2026-09-03, instrument field NIFTYFUT) -- despite the "
+                            "unsuffixed name, it is NOT BankNifty's data. .data/ml_pipeline/parquet_data_nifty "
+                            "does not exist (only _full/_labelgrid variants, both stale) -- do not use those.",
         notes="Live real money. Label-target study 2026-09-09 found the live model's own Feb-Jul backtest "
               "was itself in-sample-contaminated (0 trades on a clean Aug-Sep re-test) -- the whole study's "
               "results need redoing on a clean window before any of them are trusted.",
@@ -63,6 +75,9 @@ INSTRUMENT_ML_CONFIGS: dict[str, InstrumentMLConfig] = {
         label_horizon_min=15,
         live_model_path="/app/models/finnifty_entry_015pct_v2.joblib",
         live_entry_min_prob=0.57,
+        parquet_base="/app/.data/ml_pipeline/parquet_data_finnifty",
+        parquet_base_notes="STALE as of 2026-09-09: latest trade_date is 2026-07-31, same as BankNifty's -- "
+                            "cannot backtest anything after that until a fresh export is run.",
         notes="Paper only. Confirmed dormant (ML_ENTRY fired zero times ever -- threshold above the "
               "model's live-observed ceiling). A full retrain (v3) fixed the probability-range bug but "
               "found no real edge at any threshold. Real fix needs new signal, not another retrain -- see "
@@ -75,6 +90,12 @@ INSTRUMENT_ML_CONFIGS: dict[str, InstrumentMLConfig] = {
         label_horizon_min=15,
         live_model_path="/app/models/sensex_entry_015pct_v2.joblib",
         live_entry_min_prob=0.50,
+        parquet_base="/app/.data/ml_pipeline/parquet_data_sensex",
+        parquet_base_notes="STALE as of 2026-09-09: latest trade_date is 2026-08-06 (this instrument's "
+                            "training holdout_end) -- cannot backtest anything after that until a fresh "
+                            "export is run. The unsuffixed .data/ml_pipeline/parquet_data is NIFTY's data, "
+                            "NOT Sensex's -- a real 2026-09-09 incident used it by mistake and produced a "
+                            "wrong, since-retracted result (project_backtest_wrong_instrument_parquet_2026-09-09.md).",
         notes="Paper only. v2 deployed 2026-09-05 after beating v1 in a capital-weighted backtest "
               "(+2.02% vs +1.50%) -- that backtest used the SAME Feb-Jul-vs-train-through-mid-June window "
               "later found to risk in-sample contamination; not yet re-verified on clean data.",
@@ -85,6 +106,9 @@ INSTRUMENT_ML_CONFIGS: dict[str, InstrumentMLConfig] = {
         label_horizon_min=15,
         live_model_path=None,  # cold-start, never deployed
         live_entry_min_prob=None,
+        parquet_base="/app/.data/ml_pipeline/parquet_data_midcpnifty",
+        parquet_base_notes="Confirmed 2026-09-09: current/live-updated (latest trade_date 2026-09-03, "
+                            "instrument field MIDCPNIFTYFUT).",
         notes="Cold-start, 5th instrument. Backfilled + trained (holdout AUC 0.639, ship_gates fail but "
               "not degenerate). Capital-weighted backtest never run. No real or paper money at stake yet.",
     ),

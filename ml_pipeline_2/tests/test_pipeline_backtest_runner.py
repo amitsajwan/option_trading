@@ -8,7 +8,11 @@ from ml_pipeline_2.pipeline.backtest_runner import (
     summarize_trades,
     trade_rupees,
 )
-from ml_pipeline_2.pipeline.validation import BacktestWindowContaminated, ModelDegenerate
+from ml_pipeline_2.pipeline.validation import (
+    BacktestWindowContaminated,
+    ModelDegenerate,
+    ParquetInstrumentMismatch,
+)
 
 
 def test_trade_rupees_matches_bankniftys_real_config_a_math() -> None:
@@ -104,10 +108,11 @@ def test_run_backtest_proceeds_on_a_clean_window(monkeypatch: pytest.MonkeyPatch
     class FakeResult:
         days = [FakeDay()]
 
-    def fake_run_range(date_from: str, date_to: str, config_env: dict[str, str]) -> FakeResult:
+    def fake_run_range(date_from: str, date_to: str, config_env: dict[str, str], parquet_base=None) -> FakeResult:
         captured["date_from"] = date_from
         captured["date_to"] = date_to
         captured["config_env"] = config_env
+        captured["parquet_base"] = parquet_base
         return FakeResult()
 
     summary = run_backtest(
@@ -118,10 +123,12 @@ def test_run_backtest_proceeds_on_a_clean_window(monkeypatch: pytest.MonkeyPatch
         date_to="2026-09-03",
         holdout_end="2026-07-31",
         run_range_fn=fake_run_range,
+        skip_parquet_instrument_check=True,
     )
     assert summary.live_trades == 1
     assert captured["config_env"]["STRATEGY_LOT_SIZE"] == "65"  # NIFTY's verified lot size, not hardcoded
     assert captured["config_env"]["ENTRY_ML_MIN_PROB"] == "0.5"
+    assert captured["parquet_base"] == "/app/.data/ml_pipeline/parquet_data"  # NIFTY's configured parquet_base
 
 
 def test_run_backtest_refuses_a_finnifty_style_unreachable_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -171,5 +178,77 @@ def test_run_backtest_proceeds_when_threshold_matches_the_models_own_table(monke
         holdout_end="2026-07-31",
         holdout_eval=holdout_eval,
         run_range_fn=lambda *a, **k: FakeResult(),
+        skip_parquet_instrument_check=True,
+    )
+    assert summary.live_trades == 0
+
+
+def test_run_backtest_refuses_the_actual_wrong_instrument_parquet_incident() -> None:
+    # The real 2026-09-09 incident: a SENSEX backtest silently ran against
+    # NIFTY's own market data (both fell back to the same default parquet
+    # path) and produced a real-looking but completely wrong result (4
+    # "trades", -5.9% return). run_backtest must now refuse BEFORE calling
+    # run_range at all.
+    def fake_run_range(*args: object, **kwargs: object) -> object:
+        raise AssertionError("run_range should never be called -- parquet instrument check must fail first")
+
+    def fake_read_instrument(parquet_base: str, sample_trade_date: str) -> str:
+        return "NIFTYFUT"  # the real wrong value found in .data/ml_pipeline/parquet_data
+
+    with pytest.raises(ParquetInstrumentMismatch, match="NIFTYFUT"):
+        run_backtest(
+            instrument="SENSEX",
+            model_path="/app/models/sensex_entry_015pct_v2.joblib",
+            entry_min_prob=0.3,
+            date_from="2026-08-10",
+            date_to="2026-09-03",
+            holdout_end="2026-08-06",
+            run_range_fn=fake_run_range,
+            read_instrument_fn=fake_read_instrument,
+        )
+
+
+def test_run_backtest_proceeds_when_parquet_instrument_matches() -> None:
+    class FakeDay:
+        trades: list[dict[str, object]] = []
+
+    class FakeResult:
+        days = [FakeDay()]
+
+    def fake_read_instrument(parquet_base: str, sample_trade_date: str) -> str:
+        return "SENSEXFUT"
+
+    summary = run_backtest(
+        instrument="SENSEX",
+        model_path="/app/models/sensex_entry_015pct_v2.joblib",
+        entry_min_prob=0.3,
+        date_from="2026-08-10",
+        date_to="2026-09-03",
+        holdout_end="2026-08-06",
+        run_range_fn=lambda *a, **k: FakeResult(),
+        read_instrument_fn=fake_read_instrument,
+    )
+    assert summary.live_trades == 0
+
+
+def test_run_backtest_skips_the_check_gracefully_when_sample_day_has_no_data() -> None:
+    # read_instrument_fn returning None (e.g. the sample day simply isn't
+    # in this parquet_base yet) must not be treated as a mismatch -- that's
+    # validate_backtest_window/the SIM harness's own "no data" to report.
+    class FakeDay:
+        trades: list[dict[str, object]] = []
+
+    class FakeResult:
+        days = [FakeDay()]
+
+    summary = run_backtest(
+        instrument="SENSEX",
+        model_path="/app/models/sensex_entry_015pct_v2.joblib",
+        entry_min_prob=0.3,
+        date_from="2026-08-10",
+        date_to="2026-09-03",
+        holdout_end="2026-08-06",
+        run_range_fn=lambda *a, **k: FakeResult(),
+        read_instrument_fn=lambda base, date: None,
     )
     assert summary.live_trades == 0

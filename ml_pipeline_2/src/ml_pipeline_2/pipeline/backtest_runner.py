@@ -15,6 +15,15 @@ Mongo/parquet access.
 Every call to `run_backtest` enforces `validate_backtest_window` first --
 this is the fix for the in-sample contamination incident: a caller simply
 cannot skip the check, it's not a step someone has to remember.
+
+It also resolves and verifies `parquet_base` per instrument (from
+`instrument_config.InstrumentMLConfig.parquet_base`) before running --
+the fix for a second, worse incident the same night: a SENSEX backtest
+silently ran against NIFTY's own market data because nothing threaded an
+instrument-specific parquet path through to the SIM harness, and every
+instrument fell back to the same default directory. See
+`validation.validate_parquet_instrument` and
+project_backtest_wrong_instrument_parquet_2026-09-09.md.
 """
 from __future__ import annotations
 
@@ -22,8 +31,38 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from .instrument_config import get_instrument_config
-from .validation import DateLike, check_model_degeneracy, validate_backtest_window
+from .validation import (
+    DateLike,
+    check_model_degeneracy,
+    validate_backtest_window,
+    validate_parquet_instrument,
+)
 from .windowing import max_drawdown_pct
+
+
+def _read_sample_instrument(parquet_base: str, sample_trade_date: str) -> Optional[str]:
+    """Peek at one row of one day's snapshot parquet to read its
+    `instrument` field (e.g. "NIFTYFUT"), for validate_parquet_instrument.
+    Needs duckdb -- only actually callable inside the strategy_app
+    container, same as the real run_range. Returns None (skip the check,
+    don't crash) if the sample day simply isn't in this parquet_base --
+    that's `validate_backtest_window`/the SIM harness's own "no snapshot
+    days found" to report, not an instrument-identity problem."""
+    import json
+    from pathlib import Path
+
+    path = Path(parquet_base) / "snapshots" / f"trade_date={sample_trade_date}" / "data.parquet"
+    if not path.exists():
+        return None
+    import duckdb
+
+    con = duckdb.connect()
+    df = con.execute(
+        f"SELECT snapshot_raw_json FROM read_parquet('{path.as_posix()}') LIMIT 1"
+    ).fetchdf()
+    if len(df) == 0:
+        return None
+    return json.loads(df.iloc[0]["snapshot_raw_json"]).get("instrument")
 
 
 def trade_rupees(trade: dict[str, Any], lot_size: int) -> float:
@@ -130,6 +169,9 @@ def run_backtest(
     min_gap_days: int = 0,
     holdout_eval: Optional[dict[str, Any]] = None,
     run_range_fn: Optional[Callable[..., Any]] = None,
+    parquet_base: Optional[str] = None,
+    skip_parquet_instrument_check: bool = False,
+    read_instrument_fn: Optional[Callable[[str, str], Optional[str]]] = None,
 ) -> BacktestSummary:
     """Run one capital-weighted backtest config for an instrument.
 
@@ -146,6 +188,14 @@ def run_backtest(
     the model bundle is available; omit only when testing the plumbing
     itself.
 
+    `parquet_base` defaults to `instrument_config`'s per-instrument value
+    -- ALWAYS resolved and (unless `skip_parquet_instrument_check`) verified
+    against the parquet data's own `instrument` field before running,
+    because omitting this once let a SENSEX backtest silently run against
+    NIFTY's market data (both fell back to the SAME default path) and
+    produce a real-looking, completely wrong result. Only skip the check
+    when testing the plumbing itself.
+
     `run_range_fn` is injectable for testing; defaults to the real
     `strategy_app.sim.multi_day_runner.run_range`, which requires live
     Mongo/parquet access and is only actually callable inside the
@@ -159,6 +209,14 @@ def run_backtest(
         check_model_degeneracy(holdout_eval, chosen_threshold=entry_min_prob)
 
     cfg = get_instrument_config(instrument)
+    resolved_parquet_base = parquet_base or cfg.parquet_base
+
+    if not skip_parquet_instrument_check and resolved_parquet_base is not None:
+        read_fn = read_instrument_fn or _read_sample_instrument
+        actual_instrument = read_fn(resolved_parquet_base, str(date_from))
+        if actual_instrument is not None:
+            validate_parquet_instrument(expected_instrument=cfg.name, actual_instrument=actual_instrument)
+
     config_env = {
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
@@ -173,6 +231,6 @@ def run_backtest(
     if run_range_fn is None:
         from strategy_app.sim.multi_day_runner import run_range as run_range_fn  # type: ignore[no-redef]
 
-    result = run_range_fn(str(date_from), str(date_to), config_env)
+    result = run_range_fn(str(date_from), str(date_to), config_env, parquet_base=resolved_parquet_base)
     all_trades = [t for day in result.days for t in day.trades]
     return summarize_trades(label or f"{cfg.name} {model_path} @thr={entry_min_prob}", all_trades, cfg.lot_size)

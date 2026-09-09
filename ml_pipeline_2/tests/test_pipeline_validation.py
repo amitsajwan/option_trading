@@ -1,5 +1,5 @@
 """Regression tests for ml_pipeline_2.pipeline.validation -- fixtures are
-the ACTUAL numbers from the two real incidents this session that motivated
+the ACTUAL numbers from the real incidents this session that motivated
 each check, not synthetic examples."""
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ import pytest
 from ml_pipeline_2.pipeline.validation import (
     BacktestWindowContaminated,
     ModelDegenerate,
+    ParquetInstrumentMismatch,
     check_model_degeneracy,
     validate_backtest_window,
+    validate_parquet_instrument,
 )
 
 
@@ -154,3 +156,28 @@ class TestCheckModelDegeneracy:
         assert result.ok
         assert result.chosen_threshold is None
         assert result.chosen_threshold_usable is None
+
+
+class TestValidateParquetInstrument:
+    def test_rejects_the_actual_sensex_reading_nifty_data_incident(self) -> None:
+        # 2026-09-09: a SENSEX backtest's parquet_base actually held NIFTY's
+        # data (instrument field "NIFTYFUT") because no instrument-specific
+        # path was configured/checked -- produced a real-looking but
+        # completely wrong result (4 "trades", -5.9% return).
+        with pytest.raises(ParquetInstrumentMismatch, match="NIFTYFUT"):
+            validate_parquet_instrument(expected_instrument="SENSEX", actual_instrument="NIFTYFUT")
+
+    def test_accepts_a_matching_instrument(self) -> None:
+        result = validate_parquet_instrument(expected_instrument="SENSEX", actual_instrument="SENSEXFUT")
+        assert result.ok
+
+    def test_matches_case_insensitively_on_the_expected_side(self) -> None:
+        result = validate_parquet_instrument(expected_instrument="sensex", actual_instrument="SENSEXFUT")
+        assert result.ok
+
+    def test_non_raising_mode_returns_a_result_instead(self) -> None:
+        result = validate_parquet_instrument(
+            expected_instrument="BANKNIFTY", actual_instrument="NIFTYFUT", raise_on_fail=False,
+        )
+        assert not result.ok
+        assert "NIFTYFUT" in result.reason

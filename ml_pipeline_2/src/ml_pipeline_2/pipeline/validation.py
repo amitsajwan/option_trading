@@ -18,6 +18,15 @@ session, not as speculative hardening:
   back explicitly. A cheap check on the holdout separation table at
   training time would have caught this before it ever reached serving.
 
+- `validate_parquet_instrument`: a SENSEX backtest silently ran against
+  NIFTY's own market data and produced a real-looking (wrong, -5.9%
+  return, 4 "trades") result, because `run_backtest` never threaded an
+  instrument-specific `parquet_base` through to the SIM harness -- every
+  instrument fell back to the SAME default snapshot directory, which
+  happened to hold NIFTY's data. Caught only because the result looked
+  worth double-checking, not because anything failed loudly. See
+  project_backtest_wrong_instrument_parquet_2026-09-09.md.
+
 These are meant to run automatically as part of `train` and `backtest`
 pipeline nodes and FAIL LOUD (raise) rather than print a warning someone
 can miss -- the whole point is not depending on a human remembering to
@@ -43,6 +52,11 @@ class ModelDegenerate(ValueError):
     unusable at any normal threshold -- e.g. every separation_table entry
     is degenerate, or precision_fired is 0.0 / separation is negative
     wherever the model does fire."""
+
+
+class ParquetInstrumentMismatch(RuntimeError):
+    """Raised when a backtest's parquet_base contains a different
+    instrument's snapshot data than the one being backtested."""
 
 
 def _to_date(value: DateLike) -> date:
@@ -192,4 +206,47 @@ def check_model_degeneracy(
     )
     if not ok and raise_on_fail:
         raise ModelDegenerate(reason)
+    return result
+
+
+@dataclass(frozen=True)
+class ParquetInstrumentCheck:
+    ok: bool
+    expected_instrument: str
+    actual_instrument: Optional[str]
+    reason: str = ""
+
+
+def validate_parquet_instrument(
+    *,
+    expected_instrument: str,
+    actual_instrument: Optional[str],
+    raise_on_fail: bool = True,
+) -> ParquetInstrumentCheck:
+    """Confirm a parquet_base's snapshot data actually belongs to the
+    instrument being backtested, before trusting anything it produces.
+
+    Snapshot rows carry an `instrument` field in the form `"<NAME>FUT"`
+    (verified 2026-09-09: BANKNIFTYFUT, NIFTYFUT, FINNIFTYFUT, SENSEXFUT,
+    MIDCPNIFTYFUT). `actual_instrument` is whatever a caller read from one
+    sample row (see `backtest_runner._read_sample_instrument`, which needs
+    duckdb and is only meaningfully callable inside the strategy_app
+    container -- this function itself takes the already-read string so
+    it stays a pure, unit-testable comparison).
+    """
+    expected = f"{expected_instrument.strip().upper()}FUT"
+    ok = actual_instrument == expected
+    reason = "" if ok else (
+        f"parquet_base's snapshot data is for instrument={actual_instrument!r}, not the "
+        f"expected {expected!r} for this backtest's instrument={expected_instrument!r}. "
+        f"Real incident 2026-09-09: a SENSEX backtest silently ran against NIFTY's own "
+        f"market data because no instrument-specific parquet_base was configured/checked, "
+        f"producing a real-looking but completely wrong result. Fix the parquet_base for "
+        f"this instrument (see instrument_config.py) before trusting anything from this run."
+    )
+    result = ParquetInstrumentCheck(
+        ok=ok, expected_instrument=expected_instrument, actual_instrument=actual_instrument, reason=reason,
+    )
+    if not ok and raise_on_fail:
+        raise ParquetInstrumentMismatch(reason)
     return result
