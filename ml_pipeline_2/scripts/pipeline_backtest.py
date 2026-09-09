@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
                               "if it doesn't start strictly after this (in-sample contamination guard)")
     parser.add_argument("--min-gap-days", type=int, default=0)
     parser.add_argument("--label", default=None)
+    parser.add_argument("--candidate-id", default=None,
+                         help="friendly id for pipeline_select.py's ranking output; "
+                              "defaults to --model-path if omitted")
     parser.add_argument("--mongo-host", default="mongo")
     parser.add_argument("--no-registry", action="store_true", help="skip recording to the results registry")
     parser.add_argument("--skip-degeneracy-check", action="store_true",
@@ -90,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         doc = build_run_document(
             instrument=args.instrument, study_id=args.study_id, node="backtest",
             config={
+                "candidate_id": args.candidate_id or args.model_path,
                 "model_path": args.model_path, "threshold": args.threshold,
                 "date_from": args.date_from, "date_to": args.date_to,
                 "holdout_end": args.holdout_end,

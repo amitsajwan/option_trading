@@ -128,6 +128,22 @@ model, a retrain, a threshold change, or a label-definition change alike.
   unmonitored real-money switch) as the next step for anything genuinely
   promising, matching how prior deploys in this repo were staged.
 
+## Picking a winner across a study's candidates — don't eyeball it
+
+Once every candidate in a study has a `node="backtest"` record in
+`ml_pipeline_runs`, run
+`python3 -m ml_pipeline_2.scripts.pipeline_select --instrument <X> --study-id <id>`
+instead of reading the result table by hand. It applies the two rules
+above mechanically (`ml_pipeline_2.pipeline.candidates.select_best_candidate`):
+a `contaminated`/`degenerate` verdict is a hard exclusion no matter how
+good the raw number is, and a thin-sample candidate can never out-rank a
+robust one. This exists specifically because the NIFTY 0.25% config's
+contaminated +3.09% return was, for a moment, the best-looking number in
+its whole study — the kind of thing a human skimming a table can miss
+under time pressure. It records its verdict back to the registry as a
+`node="deploy_decision"` document, so the decision itself becomes part of
+the study's audit trail, not just its inputs.
+
 ## Before ever deploying anything from a study
 
 - [ ] Ship gates passing (or a clearly reasoned, explicit exception).
