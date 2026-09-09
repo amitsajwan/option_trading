@@ -54,7 +54,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.path.insert(0, "/app")
     from ml_pipeline_2.pipeline.backtest_runner import build_backtest_result, run_backtest
-    from ml_pipeline_2.pipeline.validation import BacktestWindowContaminated, ModelDegenerate
+    from ml_pipeline_2.pipeline.validation import (
+        BacktestWindowContaminated,
+        ModelDegenerate,
+        ParquetInstrumentMismatch,
+    )
 
     holdout_eval = None
     if not args.skip_degeneracy_check:
@@ -74,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             min_gap_days=args.min_gap_days,
             holdout_eval=holdout_eval,
         )
-    except (BacktestWindowContaminated, ModelDegenerate) as exc:
+    except (BacktestWindowContaminated, ModelDegenerate, ParquetInstrumentMismatch) as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
 
