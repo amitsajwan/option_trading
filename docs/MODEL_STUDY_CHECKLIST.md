@@ -5,6 +5,22 @@ model studies on this repo, not a hypothetical. Run through this before
 trusting or presenting any training/backtest result — for a brand-new
 model, a retrain, a threshold change, or a label-definition change alike.
 
+## Running a multi-candidate study unattended (overnight)
+
+`ml_pipeline_2/scripts/pipeline_run_all.py` runs a whole multi-instrument,
+multi-candidate study sequentially and unattended — train, backtest,
+record, select, for every instrument in a config, then prints a "what
+happened, why, which model" summary. It never deploys or touches a live
+container. **Always run it with `--dry-run` first** — clips every
+candidate's windows to a few days and cuts HPO trials to a handful, so
+the whole pipeline (data load → HPO → calibration → holdout eval →
+ship-gate check → backtest window validation → backtest → registry
+record → selection) proves it runs end-to-end in minutes before
+committing hours of real compute to it. See its module docstring for the
+detached-launch command (`docker run -d`, so it survives an SSH
+disconnect) and `ml_pipeline_2/configs/overnight_studies/
+overnight_study_template.json` for a real starting config.
+
 ## Before training
 
 - [ ] **Confirm the training/valid/holdout windows don't leak into each
