@@ -122,3 +122,35 @@ class TestCheckModelDegeneracy:
         result = check_model_degeneracy({"separation_table": []}, raise_on_fail=False)
         assert not result.ok
         assert result.usable_thresholds == []
+
+    def test_chosen_threshold_outside_usable_set_is_rejected(self) -> None:
+        # FINNIFTY's actual bug: table has usable points, but the DEPLOYED
+        # threshold wasn't one of them.
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.3, "fire_rate": 0.04, "precision_fired": 0.53, "separation": 0.40},
+            ],
+        }
+        with pytest.raises(ModelDegenerate, match="NOT one of this model's own usable thresholds"):
+            check_model_degeneracy(holdout_eval, chosen_threshold=0.57)
+
+    def test_chosen_threshold_inside_usable_set_passes(self) -> None:
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.3, "fire_rate": 0.04, "precision_fired": 0.53, "separation": 0.40},
+            ],
+        }
+        result = check_model_degeneracy(holdout_eval, chosen_threshold=0.3)
+        assert result.ok
+        assert result.chosen_threshold_usable is True
+
+    def test_no_chosen_threshold_only_checks_table_has_some_usable_point(self) -> None:
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.5, "fire_rate": 0.0034, "precision_fired": 0.92, "separation": 0.7763},
+            ],
+        }
+        result = check_model_degeneracy(holdout_eval)
+        assert result.ok
+        assert result.chosen_threshold is None
+        assert result.chosen_threshold_usable is None

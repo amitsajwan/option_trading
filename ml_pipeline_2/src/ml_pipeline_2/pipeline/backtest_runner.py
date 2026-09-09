@@ -10,7 +10,7 @@ unit-tested without any database or docker dependency. `run_backtest` is
 the thin orchestration layer that calls `strategy_app.sim.multi_day_runner.
 run_range` -- exercised on the VM (inside the strategy_app container,
 same as every backtest this session), not here, since it needs live
-Mongo/parquet access `.
+Mongo/parquet access.
 
 Every call to `run_backtest` enforces `validate_backtest_window` first --
 this is the fix for the in-sample contamination incident: a caller simply
@@ -18,11 +18,11 @@ cannot skip the check, it's not a step someone has to remember.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from .instrument_config import get_instrument_config
-from .validation import DateLike, validate_backtest_window
+from .validation import DateLike, check_model_degeneracy, validate_backtest_window
 
 
 def trade_rupees(trade: dict[str, Any], lot_size: int) -> float:
@@ -116,6 +116,7 @@ def run_backtest(
     label: Optional[str] = None,
     extra_config: Optional[dict[str, str]] = None,
     min_gap_days: int = 0,
+    holdout_eval: Optional[dict[str, Any]] = None,
     run_range_fn: Optional[Callable[..., Any]] = None,
 ) -> BacktestSummary:
     """Run one capital-weighted backtest config for an instrument.
@@ -124,6 +125,14 @@ def run_backtest(
     BacktestWindowContaminated if it overlaps) -- this cannot be skipped
     by a caller the way the bespoke scripts this session could (and once
     did) skip it.
+
+    If `holdout_eval` is supplied (the trained bundle's own holdout_eval
+    dict), ALSO checks that `entry_min_prob` is one of this model's own
+    usable thresholds before spending time on the backtest -- catches a
+    FINNIFTY-style "threshold above the model's real ceiling" mistake
+    before it wastes a multi-hour run, not just after. Pass it whenever
+    the model bundle is available; omit only when testing the plumbing
+    itself.
 
     `run_range_fn` is injectable for testing; defaults to the real
     `strategy_app.sim.multi_day_runner.run_range`, which requires live
@@ -134,6 +143,8 @@ def run_backtest(
         holdout_end=holdout_end, backtest_from=date_from, backtest_to=date_to,
         min_gap_days=min_gap_days,
     )
+    if holdout_eval is not None:
+        check_model_degeneracy(holdout_eval, chosen_threshold=entry_min_prob)
 
     cfg = get_instrument_config(instrument)
     config_env = {

@@ -15,7 +15,7 @@ of it for pipeline code to import, not a replacement for checking.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

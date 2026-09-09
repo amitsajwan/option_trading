@@ -44,11 +44,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--label", default=None)
     parser.add_argument("--mongo-host", default="mongo")
     parser.add_argument("--no-registry", action="store_true", help="skip recording to the results registry")
+    parser.add_argument("--skip-degeneracy-check", action="store_true",
+                         help="skip validating --threshold against the model's own separation_table "
+                              "(only for models whose bundle doesn't carry holdout_eval)")
     args = parser.parse_args(argv)
 
     sys.path.insert(0, "/app")
     from ml_pipeline_2.pipeline.backtest_runner import build_backtest_result, run_backtest
     from ml_pipeline_2.pipeline.validation import BacktestWindowContaminated, ModelDegenerate
+
+    holdout_eval = None
+    if not args.skip_degeneracy_check:
+        import joblib
+        bundle = joblib.load(args.model_path)
+        holdout_eval = bundle.get("holdout_eval")
 
     try:
         summary = run_backtest(
@@ -60,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             holdout_end=args.holdout_end,
             label=args.label,
             min_gap_days=args.min_gap_days,
+            holdout_eval=holdout_eval,
         )
     except (BacktestWindowContaminated, ModelDegenerate) as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)

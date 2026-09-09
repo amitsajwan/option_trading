@@ -8,7 +8,7 @@ from ml_pipeline_2.pipeline.backtest_runner import (
     summarize_trades,
     trade_rupees,
 )
-from ml_pipeline_2.pipeline.validation import BacktestWindowContaminated
+from ml_pipeline_2.pipeline.validation import BacktestWindowContaminated, ModelDegenerate
 
 
 def test_trade_rupees_matches_bankniftys_real_config_a_math() -> None:
@@ -106,3 +106,54 @@ def test_run_backtest_proceeds_on_a_clean_window(monkeypatch: pytest.MonkeyPatch
     assert summary.live_trades == 1
     assert captured["config_env"]["STRATEGY_LOT_SIZE"] == "65"  # NIFTY's verified lot size, not hardcoded
     assert captured["config_env"]["ENTRY_ML_MIN_PROB"] == "0.5"
+
+
+def test_run_backtest_refuses_a_finnifty_style_unreachable_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reproduces the actual FINNIFTY bug: a threshold (0.57) picked above
+    # the model's own live-observed ceiling. When holdout_eval is passed,
+    # run_backtest must refuse BEFORE calling run_range -- no wasted
+    # multi-hour backtest on a config that's provably unusable offline.
+    def fake_run_range(*args: object, **kwargs: object) -> object:
+        raise AssertionError("run_range should never be called -- degeneracy check must fail first")
+
+    holdout_eval = {
+        "separation_table": [
+            {"thr": 0.3, "fire_rate": 0.04, "precision_fired": 0.53, "separation": 0.40},
+        ],
+    }
+    with pytest.raises(ModelDegenerate, match="NOT one of this model's own usable thresholds"):
+        run_backtest(
+            instrument="FINNIFTY",
+            model_path="/app/models/finnifty_entry_015pct_v2.joblib",
+            entry_min_prob=0.57,  # not in the table above -- exactly FINNIFTY's real mistake
+            date_from="2026-08-03",
+            date_to="2026-09-03",
+            holdout_end="2026-07-31",
+            holdout_eval=holdout_eval,
+            run_range_fn=fake_run_range,
+        )
+
+
+def test_run_backtest_proceeds_when_threshold_matches_the_models_own_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDay:
+        trades: list[dict[str, object]] = []
+
+    class FakeResult:
+        days = [FakeDay()]
+
+    holdout_eval = {
+        "separation_table": [
+            {"thr": 0.3, "fire_rate": 0.04, "precision_fired": 0.53, "separation": 0.40},
+        ],
+    }
+    summary = run_backtest(
+        instrument="FINNIFTY",
+        model_path="/app/models/finnifty_entry_015pct_v2.joblib",
+        entry_min_prob=0.3,  # matches the table this time
+        date_from="2026-08-03",
+        date_to="2026-09-03",
+        holdout_end="2026-07-31",
+        holdout_eval=holdout_eval,
+        run_range_fn=lambda *a, **k: FakeResult(),
+    )
+    assert summary.live_trades == 0

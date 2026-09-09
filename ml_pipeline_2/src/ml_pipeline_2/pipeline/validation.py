@@ -109,12 +109,15 @@ class DegeneracyReport:
     best_separation: Optional[float] = None
     holdout_prob_min: Optional[float] = None
     holdout_prob_max: Optional[float] = None
+    chosen_threshold: Optional[float] = None
+    chosen_threshold_usable: Optional[bool] = None
     reason: str = ""
 
 
 def check_model_degeneracy(
     holdout_eval: dict[str, Any],
     *,
+    chosen_threshold: Optional[float] = None,
     min_precision: float = 0.30,
     min_separation: float = 0.10,
     raise_on_fail: bool = True,
@@ -125,6 +128,13 @@ def check_model_degeneracy(
     (auc/ece/prob_spread) and still be practically unusable -- ship gates
     check aggregate statistics, this checks whether there's an actual
     workable operating point.
+
+    If `chosen_threshold` is given, this ALSO fails when that SPECIFIC
+    threshold isn't one of the usable ones -- checking "some threshold
+    works" isn't enough on its own, since a caller could still pick a
+    different, unusable one from the same table. This is what
+    FINNIFTY's live threshold (0.57, above its own live-observed ceiling
+    of 0.43) would have failed had this check existed before it deployed.
 
     `holdout_eval` is the dict as embedded in a training bundle
     (`joblib.load(path)["holdout_eval"]`) -- expects `separation_table`
@@ -152,19 +162,33 @@ def check_model_degeneracy(
         if best_separation is None or separation > best_separation:
             best_separation = separation
 
-    ok = len(usable) > 0
-    reason = "" if ok else (
-        f"no threshold in the separation_table clears precision>={min_precision} AND "
-        f"separation>={min_separation} (best seen: precision={best_precision}, "
-        f"separation={best_separation}) -- this model has no usable operating point "
-        f"regardless of what its AUC or ship gates say. Do not pick a threshold from "
-        f"a different model's table to compensate -- that exact mistake caused "
-        f"FINNIFTY's total live dormancy."
-    )
+    has_any_usable = len(usable) > 0
+    chosen_usable = (chosen_threshold in usable) if chosen_threshold is not None else None
+    ok = has_any_usable and (chosen_usable is not False)
+
+    if not has_any_usable:
+        reason = (
+            f"no threshold in the separation_table clears precision>={min_precision} AND "
+            f"separation>={min_separation} (best seen: precision={best_precision}, "
+            f"separation={best_separation}) -- this model has no usable operating point "
+            f"regardless of what its AUC or ship gates say."
+        )
+    elif chosen_usable is False:
+        reason = (
+            f"chosen_threshold={chosen_threshold} is NOT one of this model's own usable "
+            f"thresholds ({sorted(usable)}) -- do not pick a threshold from a different "
+            f"model's table, or one that merely looked good in an earlier version. That "
+            f"exact mistake caused FINNIFTY's total live dormancy: its deployed threshold "
+            f"(0.57) sat above its own live-observed probability ceiling (0.43)."
+        )
+    else:
+        reason = ""
+
     result = DegeneracyReport(
         ok=ok, usable_thresholds=sorted(usable), best_precision=best_precision,
         best_separation=best_separation, holdout_prob_min=prob_min,
-        holdout_prob_max=prob_max, reason=reason,
+        holdout_prob_max=prob_max, chosen_threshold=chosen_threshold,
+        chosen_threshold_usable=chosen_usable, reason=reason,
     )
     if not ok and raise_on_fail:
         raise ModelDegenerate(reason)
