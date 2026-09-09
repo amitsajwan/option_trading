@@ -27,6 +27,17 @@ Usage (run on ML VM):
         --output models/nifty_entry_bundle_v3.joblib \\
         --train-start 2024-11-01 --train-end 2026-04-30 \\
         --holdout-start 2026-05-01 --holdout-end 2026-06-30
+
+    # A label-target-grid candidate (percent-of-price move, instrument- and
+    # price-level-agnostic -- matches ml_pipeline_2.pipeline.candidates.
+    # CandidateConfig.label_pct). Omitting --label-pct/--label-pt keeps the
+    # original fixed 100pt/15min default for backward compatibility.
+    python -m ml_pipeline_2.scripts.train_entry_dhan_v3 \\
+        --instrument NIFTY --label-pct 0.10 --label-horizon-min 15 \\
+        --data-dir .data/dhan_pipeline/indicators \\
+        --output models/nifty_010pct.joblib \\
+        --train-start 2024-11-01 --train-end 2026-04-30 \\
+        --holdout-start 2026-05-01 --holdout-end 2026-06-30
 """
 from __future__ import annotations
 
@@ -93,7 +104,13 @@ ENTRY_FEATURES_V3: List[str] = [
     "vix_intraday_chg",  # computed by feature_engine from vix column
 ]
 
-# Label: 1 if |close_move| >= LABEL_PT_THRESHOLD in LABEL_HORIZON_MIN minutes
+# Label: 1 if |close_move| >= threshold in horizon_min minutes. Defaults
+# below preserve the original fixed-point behavior when --label-pct/
+# --label-pt/--label-horizon-min are not passed on the CLI. Prefer
+# --label-pct for new work -- a fixed point count is a different relative
+# move size on every instrument (100pt ~= 0.2% on BankNifty, ~0.42% on
+# NIFTY) and even on the same instrument as its price level drifts over a
+# multi-month training window.
 LABEL_PT_THRESHOLD = 100   # points
 LABEL_HORIZON_MIN  = 15    # minutes (15-bar lookahead)
 
@@ -143,11 +160,24 @@ def load_indicators(data_dir: Path, instrument: str,
     return data
 
 
-def add_labels(df: pd.DataFrame) -> pd.DataFrame:
+def add_labels(
+    df: pd.DataFrame,
+    *,
+    label_pct: Optional[float] = None,
+    label_pt: Optional[float] = None,
+    horizon_min: int = LABEL_HORIZON_MIN,
+) -> pd.DataFrame:
     """Add binary entry label: 1 if |move| >= threshold in horizon_min minutes.
     Only labels bars within the 9:45-15:05 IST session window — by 9:45 all
     30m velocity features are available; 15:05 avoids end-of-day noise.
+
+    Exactly one of `label_pct` (move as a percent of that row's own close --
+    instrument- and price-level-agnostic) or `label_pt` (fixed raw points,
+    the original behavior) should be given; if both are None, falls back to
+    the module's `LABEL_PT_THRESHOLD` constant for backward compatibility.
     """
+    if label_pct is not None and label_pt is not None:
+        raise ValueError("add_labels: pass at most one of label_pct / label_pt, not both")
     df = df.sort_values(["trade_date", "timestamp"]).copy()
     close_col = next((c for c in ["px_fut_close", "close", "fut_close"] if c in df.columns), None)
     if close_col is None:
@@ -162,13 +192,17 @@ def add_labels(df: pd.DataFrame) -> pd.DataFrame:
 
     close = pd.to_numeric(df[close_col], errors="coerce")
     # Lookahead: max |close[t+k] - close[t]| / close[t] >= threshold
-    n_bars = LABEL_HORIZON_MIN
+    n_bars = horizon_min
     future_max = close.shift(-1).rolling(window=n_bars, min_periods=n_bars).max().shift(-(n_bars - 1))
     future_min = close.shift(-1).rolling(window=n_bars, min_periods=n_bars).min().shift(-(n_bars - 1))
     up_move   = (future_max - close).abs()
     down_move = (close - future_min).abs()
     max_move  = np.maximum(up_move.fillna(0), down_move.fillna(0))
-    df["entry_label"] = (max_move >= LABEL_PT_THRESHOLD).astype(float)
+    if label_pct is not None:
+        move_threshold = close.abs() * (label_pct / 100.0)
+    else:
+        move_threshold = label_pt if label_pt is not None else LABEL_PT_THRESHOLD
+    df["entry_label"] = (max_move >= move_threshold).astype(float)
     # Mark lookahead-invalid bars as NaN (last horizon_min bars of each day)
     df.loc[future_max.isna(), "entry_label"] = np.nan
     # Apply session window filter (9:45-15:05): outside window → NaN label
@@ -328,7 +362,19 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--holdout-end",   default="2026-06-30")
     ap.add_argument("--n-trials",  type=int, default=60, help="Optuna HPO trials")
     ap.add_argument("--features",  default="", help="Comma-separated feature override (empty=default)")
+    ap.add_argument("--label-pct", type=float, default=None,
+                     help="label move threshold as %% of that bar's own close price "
+                          "(e.g. 0.10 for 0.10%%) -- instrument/price-level-agnostic, "
+                          "the preferred way to run a label-target-grid candidate. "
+                          "Mutually exclusive with --label-pt.")
+    ap.add_argument("--label-pt", type=float, default=None,
+                     help=f"label move threshold in raw index points (legacy). "
+                          f"Neither flag given => defaults to {LABEL_PT_THRESHOLD}pt.")
+    ap.add_argument("--label-horizon-min", type=int, default=LABEL_HORIZON_MIN,
+                     help="lookahead window in minutes for the label")
     args = ap.parse_args(argv)
+    if args.label_pct is not None and args.label_pt is not None:
+        ap.error("--label-pct and --label-pt are mutually exclusive")
 
     if str(_REPO) not in sys.path:
         sys.path.insert(0, str(_REPO))
@@ -349,7 +395,12 @@ def main(argv: List[str] | None = None) -> int:
     all_end   = args.holdout_end
     df = load_indicators(data_dir, args.instrument, all_start, all_end)
     df = normalise_vix(df)
-    df = add_labels(df)
+    df = add_labels(df, label_pct=args.label_pct, label_pt=args.label_pt, horizon_min=args.label_horizon_min)
+    label_def = (
+        f"{args.label_pct}% of close" if args.label_pct is not None
+        else f"{args.label_pt if args.label_pt is not None else LABEL_PT_THRESHOLD}pt"
+    )
+    log.info("Label: |move| >= %s in %d min", label_def, args.label_horizon_min)
 
     valid_rows = df["entry_label"].notna()
     df = df[valid_rows].copy()
@@ -444,8 +495,8 @@ def main(argv: List[str] | None = None) -> int:
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source":      "train_entry_dhan_v3",
         "source_description": (
-            f"{args.instrument} entry model v3. Binary label: |move|>={LABEL_PT_THRESHOLD}pt "
-            f"in {LABEL_HORIZON_MIN}min. {len(features)} features incl VIX. "
+            f"{args.instrument} entry model v3. Binary label: |move|>={label_def} "
+            f"in {args.label_horizon_min}min. {len(features)} features incl VIX. "
             f"Dhan data {args.train_start}..{args.holdout_end} monthly regime."
         ),
         # Core contract — inference reads these
@@ -460,7 +511,7 @@ def main(argv: List[str] | None = None) -> int:
         "ship_gates":       gates,
         "ship_gates_all_pass": all_pass,
         # Metadata
-        "label_definition": f"binary: 1 if max(|high-close|,|close-low|) >= {LABEL_PT_THRESHOLD}pt in next {LABEL_HORIZON_MIN}min",
+        "label_definition": f"binary: 1 if max(|high-close|,|close-low|) >= {label_def} in next {args.label_horizon_min}min",
         "training_metadata": {
             "instrument":     args.instrument,
             "train_window":   f"{args.train_start}..{args.train_end}",
@@ -473,8 +524,9 @@ def main(argv: List[str] | None = None) -> int:
             "hpo_trials":     args.n_trials,
             "hpo_valid_auc":  round(float(valid_auc), 4),
             "best_params":    best_params,
-            "label_pt":       LABEL_PT_THRESHOLD,
-            "label_horizon_min": LABEL_HORIZON_MIN,
+            "label_pct":      args.label_pct,
+            "label_pt":       args.label_pt if args.label_pt is not None else (None if args.label_pct is not None else LABEL_PT_THRESHOLD),
+            "label_horizon_min": args.label_horizon_min,
             "calibration":    "isotonic_prefit_on_valid",
         },
     }
