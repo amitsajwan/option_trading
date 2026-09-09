@@ -8,7 +8,13 @@ lightgbm>=4,<5
 google-cloud-storage>=2.0,<3
 # ml_pipeline_2/pipeline/* runs its train+backtest+registry workflow inside
 # this image (see the ml-pipeline skill's Deployment section) -- pymongo
-# for the results registry, optuna for train_entry_dhan_v3's HPO. Neither
-# was needed before that pipeline existed; added 2026-09-09.
+# for the results registry, optuna for train_entry_dhan_v3's HPO, duckdb
+# for snapshot_app.historical.parquet_store (used by strategy_app.sim.
+# multi_day_runner's SIM harness, which run_backtest calls into). None of
+# these three were needed before this pipeline existed; added 2026-09-09
+# after each surfaced in turn as a real, previously-undiscovered
+# ModuleNotFoundError/RuntimeError the first time this pipeline was
+# actually run end-to-end inside this image, not just unit-tested.
 pymongo>=4,<5
 optuna>=4,<5
+duckdb>=1,<2
