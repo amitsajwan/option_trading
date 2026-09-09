@@ -45,6 +45,22 @@ def test_no_live_trades_gives_none_metrics_not_a_crash() -> None:
     assert summary.is_thin_sample
 
 
+def test_max_drawdown_pct_reflects_a_losing_trade_after_a_winner() -> None:
+    # +Rs300 on Rs3000 capital (+10%), then -Rs600 on Rs3000 capital (-20%)
+    # -- same peak-then-loss shape as windowing.py's own drawdown test.
+    trades = [
+        {"tier": "live", "prem_in": 100.0, "prem_out": 110.0, "lots": 1},  # +10%
+        {"tier": "live", "prem_in": 100.0, "prem_out": 80.0, "lots": 1},   # -20%
+    ]
+    summary = summarize_trades("test", trades, lot_size=30)
+    assert summary.max_drawdown_pct == pytest.approx(100.0 * (1.0 - (1.10 * 0.80) / 1.10), rel=1e-6)
+
+
+def test_max_drawdown_pct_is_none_with_no_live_trades() -> None:
+    summary = summarize_trades("test", [{"tier": "paper", "prem_in": 1, "prem_out": 2, "lots": 1}], lot_size=30)
+    assert summary.max_drawdown_pct is None
+
+
 def test_all_wins_no_losses_gives_infinite_profit_factor() -> None:
     trades = [{"tier": "live", "prem_in": 10.0, "prem_out": 20.0, "lots": 1}]
     summary = summarize_trades("test", trades, lot_size=30)

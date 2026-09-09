@@ -7,7 +7,6 @@ import pytest
 
 from market_data_dashboard import app as dashboard_app
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
-from ml_pipeline_2.experiment_control.runner import run_research
 helpers = pytest.importorskip("ml_pipeline_2.tests.helpers", exc_type=ImportError)
 if not hasattr(helpers, "build_recovery_smoke_manifest"):
     pytest.skip("recovery helpers unavailable on current staged-only branch", allow_module_level=True)
@@ -88,6 +87,13 @@ def test_artifact_discovery_tolerates_non_dict_published_paths(tmp_path: Path, m
 
 
 def test_artifact_discovery_includes_recovery_research_models(tmp_path: Path, monkeypatch) -> None:
+    # experiment_control.runner was removed in the 2026-09-09 ml_pipeline_2
+    # dead-code cleanup; this whole module is already skipped on this
+    # branch (helpers lacks build_recovery_smoke_manifest, see the guard
+    # above), so import locally rather than reintroducing a module-level
+    # dependency on the removed package.
+    from ml_pipeline_2.experiment_control.runner import run_research
+
     model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
     manifest_path = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
     summary = run_research(load_and_resolve_manifest(manifest_path, validate_paths=True))

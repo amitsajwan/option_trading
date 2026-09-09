@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 
 from .instrument_config import get_instrument_config
 from .validation import DateLike, check_model_degeneracy, validate_backtest_window
+from .windowing import max_drawdown_pct
 
 
 def trade_rupees(trade: dict[str, Any], lot_size: int) -> float:
@@ -46,6 +47,7 @@ class BacktestSummary:
     worst_trade_rs: Optional[float]
     best_trade_rs: Optional[float]
     grade_distribution: dict[str, int]
+    max_drawdown_pct: Optional[float]
 
     @property
     def is_thin_sample(self) -> bool:
@@ -72,6 +74,14 @@ def summarize_trades(label: str, trades: list[dict[str, Any]], lot_size: int) ->
         g = t.get("entry_grade") or "?"
         grade_distribution[g] = grade_distribution.get(g, 0) + 1
 
+    # Per-trade return series (pnl / that trade's own capital), in fold
+    # order -- the same sequence `build_day_folds`-style walk-forward
+    # analysis would consume. Trades with zero recorded capital are
+    # skipped rather than divided by zero.
+    per_trade_returns = [
+        pnl / cap for pnl, cap in zip(pnls_rs, capital_rs) if cap
+    ]
+
     return BacktestSummary(
         label=label,
         paper_tape_trades=len(trades),
@@ -84,6 +94,7 @@ def summarize_trades(label: str, trades: list[dict[str, Any]], lot_size: int) ->
         worst_trade_rs=min(pnls_rs) if pnls_rs else None,
         best_trade_rs=max(pnls_rs) if pnls_rs else None,
         grade_distribution=grade_distribution,
+        max_drawdown_pct=(100.0 * max_drawdown_pct(per_trade_returns)) if per_trade_returns else None,
     )
 
 
@@ -101,6 +112,7 @@ def build_backtest_result(summary: BacktestSummary) -> dict[str, Any]:
         "worst_trade_rs": summary.worst_trade_rs,
         "best_trade_rs": summary.best_trade_rs,
         "grade_distribution": summary.grade_distribution,
+        "max_drawdown_pct": summary.max_drawdown_pct,
         "is_thin_sample": summary.is_thin_sample,
     }
 

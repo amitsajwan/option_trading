@@ -353,8 +353,7 @@ def _input_diagnostics(feature_row: dict[str, Any], feature_columns: list[str], 
 
 
 def _strike_from_bundle(bundle: OptionPnlBundle, snap: Any) -> Optional[int]:
-    """Compute the strike per bundle's offset rule using snap.atm_strike.
-    Mirrors ml_pipeline_2.labeling.option_pnl._compute_strike."""
+    """Compute the strike per bundle's offset rule using snap.atm_strike."""
     atm = getattr(snap, "atm_strike", None)
     if atm is None or int(atm) <= 0:
         return None
