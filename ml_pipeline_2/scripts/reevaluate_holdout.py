@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.path.insert(0, "/app")
     import joblib
+    from ml_pipeline_2.pipeline.study_runner import _best_threshold_from_holdout_eval
     from ml_pipeline_2.scripts.train_entry_dhan_v3 import (
         DEFAULT_SEPARATION_THRESHOLDS,
         add_labels,
@@ -74,9 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     new_eval = evaluate(model, X_hold, y_hold, label="holdout_rescan", thresholds=thresholds)
 
+    corrected_threshold = _best_threshold_from_holdout_eval(new_eval)
+
     print(f"\n=== {args.bundle} ===")
     print(f"rows={new_eval['rows']} base_rate={new_eval['base_rate']} roc_auc={new_eval['roc_auc']}")
     print(f"Old grid's best-separation row: {old_best}")
+    print(f"CORRECTED threshold (max precision among usable, fired_count>=20): {corrected_threshold}")
     print("Full re-scanned separation table:")
     for row in new_eval["separation_table"]:
         print(f"  {row}")
