@@ -388,6 +388,7 @@ def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
         pf = float(y[fired].mean())
         bn = float(y[~fired].mean())
         sep.append({"thr": thr, "fire_rate": round(float(fired.mean()), 4),
+                    "fired_count": int(fired.sum()),
                     "precision_fired": round(pf, 4), "base_not_fired": round(bn, 4),
                     "separation": round(pf - bn, 4)})
     log.info("%s: AUC=%.4f brier=%.4f ECE=%.4f", label, auc, brier, ece)

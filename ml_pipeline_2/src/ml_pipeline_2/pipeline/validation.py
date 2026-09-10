@@ -134,6 +134,7 @@ def check_model_degeneracy(
     chosen_threshold: Optional[float] = None,
     min_precision: float = 0.30,
     min_separation: float = 0.10,
+    min_fired_count: int = 20,
     raise_on_fail: bool = True,
 ) -> DegeneracyReport:
     """Check whether a model's holdout separation_table has ANY threshold
@@ -149,6 +150,21 @@ def check_model_degeneracy(
     different, unusable one from the same table. This is what
     FINNIFTY's live threshold (0.57, above its own live-observed ceiling
     of 0.43) would have failed had this check existed before it deployed.
+
+    `min_fired_count` guards against a second failure mode found
+    2026-09-10 alongside the threshold-ceiling incident: once
+    `train_entry_dhan_v3.evaluate()`'s threshold grid was widened past its
+    old 0.70 cap, several candidates showed a "better" (higher-precision)
+    row at a very high threshold that turned out to be based on only
+    ~10-20 fired holdout rows -- e.g. BANKNIFTY_015pct's apparent 100%
+    precision at thr>=0.80 came from just ~10-21 fires out of 7,383
+    holdout rows. That's the same statistical-rigor problem
+    `BacktestSummary.is_thin_sample` already guards at the backtest stage
+    (<15 live trades), applied here one stage earlier, at threshold
+    selection. A row without a `fired_count` field (older bundles, before
+    this field existed) is NOT excluded by this check -- only new
+    evaluations get the protection, existing usable_thresholds results
+    are not retroactively invalidated.
 
     `holdout_eval` is the dict as embedded in a training bundle
     (`joblib.load(path)["holdout_eval"]`) -- expects `separation_table`
@@ -168,6 +184,9 @@ def check_model_degeneracy(
         precision = row.get("precision_fired")
         separation = row.get("separation")
         if precision is None or separation is None:
+            continue
+        fired_count = row.get("fired_count")
+        if fired_count is not None and fired_count < min_fired_count:
             continue
         if precision >= min_precision and separation >= min_separation:
             usable.append(float(row["thr"]))

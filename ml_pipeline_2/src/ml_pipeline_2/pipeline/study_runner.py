@@ -145,33 +145,50 @@ class InstrumentStudyOutcome:
 
 
 def _best_threshold_from_holdout_eval(holdout_eval: dict[str, Any]) -> Optional[float]:
-    """Pick the most selective (highest) usable threshold from a model's
-    own separation_table -- the automatic version of what a human reads
-    off the table by eye before choosing what to backtest.
+    """Pick the highest-precision usable threshold from a model's own
+    separation_table -- the automatic version of what a human reads off
+    the table by eye before choosing what to backtest.
 
-    Deliberately NOT "whichever threshold has the single highest
-    separation number" -- that rewards low-selectivity thresholds. A real
-    2026-09-09 SENSEX candidate's best-separation threshold (0.30) fired
-    on 63% of ALL holdout bars (37.4% precision vs a 29.5% base rate --
-    barely better than chance), because separation there (precision_fired
-    minus precision-when-NOT-fired) happened to compute out a few points
-    higher than a much more selective, obviously-better threshold (0.70:
-    1.65% fire rate, 44.7% precision). A criterion that fires on most of
-    the data isn't identifying entries, it's close to "always enter."
+    This function's own history is worth reading before changing it
+    again -- it was wrong twice in the same day (2026-09-10):
 
-    Reuses `check_model_degeneracy`'s own usable_thresholds (the same
-    precision>=min_precision AND separation>=min_separation bar already
-    established there) and takes the HIGHEST one -- the most selective,
-    most conservative choice among everything that already cleared the
-    usability bar, matching how every other instrument's threshold this
-    session naturally landed well under a 20% fire rate.
+    1. Originally picked whichever threshold had the single highest
+       separation NUMBER. A real SENSEX candidate's best-separation
+       threshold (0.30) fired on 63% of ALL holdout bars (37.4% precision
+       vs a 29.5% base rate -- barely better than chance) because
+       separation there computed out a few points higher than a much
+       more selective threshold. Fixed by switching to "highest usable
+       threshold" (via check_model_degeneracy's usable_thresholds).
+
+    2. That fix was ALSO wrong: once evaluate()'s threshold grid was
+       widened past its old 0.70 ceiling, one real candidate
+       (NIFTY_015pct) turned out to have precision that DECREASES above
+       0.70 (84.6% at 0.55-0.65, down to 66.7% at 0.95) -- "highest
+       threshold" picked the worse, noisier tail. Precision isn't
+       monotonic in threshold in general; there is no shortcut that
+       avoids actually looking at precision.
+
+    Correct version: among usable_thresholds (already guarded against
+    both degenerate rows and thin fired-counts by check_model_degeneracy),
+    pick the one with the HIGHEST precision_fired -- the metric that
+    actually answers "how often are we right when we act," which is what
+    an entry threshold is for. Ties broken toward the higher (more
+    conservative) threshold.
     """
     from .validation import check_model_degeneracy
 
     report = check_model_degeneracy(holdout_eval, raise_on_fail=False)
     if not report.usable_thresholds:
         return None
-    return max(report.usable_thresholds)
+    usable_set = set(report.usable_thresholds)
+    rows = [
+        row for row in (holdout_eval.get("separation_table") or [])
+        if not row.get("degenerate") and float(row.get("thr", -1)) in usable_set
+    ]
+    if not rows:
+        return None
+    best = max(rows, key=lambda row: (row["precision_fired"], row["thr"]))
+    return float(best["thr"])
 
 
 def run_candidate(

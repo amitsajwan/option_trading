@@ -157,6 +157,42 @@ class TestCheckModelDegeneracy:
         assert result.chosen_threshold is None
         assert result.chosen_threshold_usable is None
 
+    def test_excludes_a_row_with_too_few_fired_holdout_rows(self) -> None:
+        # BANKNIFTY_015pct's real re-scanned table, 2026-09-10: thr>=0.80
+        # shows 100% precision but only ~10-21 fired holdout rows out of
+        # 7,383 -- indistinguishable from noise at that sample size.
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.70, "fire_rate": 0.0042, "precision_fired": 0.871, "fired_count": 31, "separation": 0.6456},
+                {"thr": 0.80, "fire_rate": 0.0028, "precision_fired": 1.0, "fired_count": 10, "separation": 0.7741},
+            ],
+        }
+        result = check_model_degeneracy(holdout_eval, min_fired_count=20)
+        assert result.ok
+        assert result.usable_thresholds == [0.70]
+
+    def test_a_row_missing_fired_count_entirely_is_not_excluded(self) -> None:
+        # Backward compatibility: bundles trained before fired_count
+        # existed must not have their usable_thresholds retroactively
+        # narrowed just because the field is absent.
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.5, "fire_rate": 0.01, "precision_fired": 0.80, "separation": 0.60},
+            ],
+        }
+        result = check_model_degeneracy(holdout_eval, min_fired_count=20)
+        assert result.ok
+        assert result.usable_thresholds == [0.5]
+
+    def test_default_min_fired_count_is_20(self) -> None:
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.5, "fire_rate": 0.01, "precision_fired": 0.80, "fired_count": 19, "separation": 0.60},
+            ],
+        }
+        result = check_model_degeneracy(holdout_eval, raise_on_fail=False)
+        assert not result.ok
+
 
 class TestValidateParquetInstrument:
     def test_rejects_the_actual_sensex_reading_nifty_data_incident(self) -> None:
