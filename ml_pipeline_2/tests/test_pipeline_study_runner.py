@@ -12,6 +12,7 @@ import pytest
 from ml_pipeline_2.pipeline.study_runner import (
     CandidatePlan,
     InstrumentStudyPlan,
+    _best_threshold_from_holdout_eval,
     format_summary,
     run_all_instruments,
     run_candidate,
@@ -64,6 +65,45 @@ _DEGENERATE_HOLDOUT_EVAL = {
         {"thr": 0.5, "degenerate": True},
     ],
 }
+
+
+class TestBestThresholdFromHoldoutEval:
+    def test_prefers_the_more_selective_threshold_over_raw_max_separation(self) -> None:
+        # The actual 2026-09-09 SENSEX_010pct separation_table. thr=0.30 has
+        # the single highest separation (0.2145) but fires on 63% of ALL
+        # holdout bars -- barely above the 29.5% base rate, not a real
+        # entry criterion. thr=0.70 (1.65% fire rate, 44.7% precision,
+        # separation 0.1546) is what should actually get picked.
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.30, "fire_rate": 0.6306, "precision_fired": 0.3742, "base_not_fired": 0.1597, "separation": 0.2145},
+                {"thr": 0.40, "fire_rate": 0.1698, "precision_fired": 0.4243, "base_not_fired": 0.2685, "separation": 0.1558},
+                {"thr": 0.50, "fire_rate": 0.0800, "precision_fired": 0.4039, "base_not_fired": 0.2855, "separation": 0.1184},
+                {"thr": 0.55, "fire_rate": 0.0358, "precision_fired": 0.4239, "base_not_fired": 0.2902, "separation": 0.1337},
+                {"thr": 0.60, "fire_rate": 0.0354, "precision_fired": 0.4286, "base_not_fired": 0.2901, "separation": 0.1385},
+                {"thr": 0.65, "fire_rate": 0.0167, "precision_fired": 0.4535, "base_not_fired": 0.2923, "separation": 0.1612},
+                {"thr": 0.70, "fire_rate": 0.0165, "precision_fired": 0.4471, "base_not_fired": 0.2924, "separation": 0.1546},
+            ],
+        }
+        assert _best_threshold_from_holdout_eval(holdout_eval) == 0.70
+
+    def test_still_picks_the_max_separation_threshold_when_it_is_also_most_selective(self) -> None:
+        # BANKNIFTY_010pct's real table: thr=0.70 happens to have BOTH the
+        # highest separation AND the highest (most selective) threshold --
+        # the fix must not change this case.
+        holdout_eval = {
+            "separation_table": [
+                {"thr": 0.30, "fire_rate": 0.9652, "precision_fired": 0.4841, "separation": 0.1923},
+                {"thr": 0.50, "fire_rate": 0.6608, "precision_fired": 0.5468, "separation": 0.2046},
+                {"thr": 0.65, "fire_rate": 0.2223, "precision_fired": 0.6551, "separation": 0.2284},
+                {"thr": 0.70, "fire_rate": 0.0263, "precision_fired": 0.8454, "separation": 0.3778},
+            ],
+        }
+        assert _best_threshold_from_holdout_eval(holdout_eval) == 0.70
+
+    def test_returns_none_when_nothing_clears_the_usability_bar(self) -> None:
+        holdout_eval = {"separation_table": [{"thr": 0.5, "degenerate": True}]}
+        assert _best_threshold_from_holdout_eval(holdout_eval) is None
 
 
 class TestShrinkPlanForDryRun:
