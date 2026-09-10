@@ -218,6 +218,21 @@ def run_backtest(
             validate_parquet_instrument(expected_instrument=cfg.name, actual_instrument=actual_instrument)
 
     config_env = {
+        # CRITICAL: without this, strategy_app.sim.replay_engine.replay_day()
+        # defaults STRATEGY_PROFILE_ID to "trader_master_ml_entry_consensus_v1"
+        # (see docs/ENGINE_DECISION_FLOW.md #9b -- a documented, still-open
+        # sim!=live default mismatch). That profile routes every entry through
+        # DeterministicRuleEngine._process_entry_consensus(), which REQUIRES
+        # non-ML rule-based votes to combine with the ML hint via
+        # resolve_direction_consensus() -- votes this ML-only backtest config
+        # never produces. Root-caused 2026-09-10: 6 recalibrated candidates
+        # each showed a real, correctly-firing ML entry_prob (confirmed via a
+        # DEBUG-level trace) that still produced zero backtest trades, because
+        # every fired vote was silently discarded by the wrong profile's
+        # consensus dispatch, not by calibration, threshold, or a real gate.
+        # Setting it here routes to the SAME default (composite) dispatch live
+        # trading actually uses.
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1",
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
         "RISK_LIVE_MIN_GRADE": "GOOD",
