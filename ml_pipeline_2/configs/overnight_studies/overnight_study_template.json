@@ -1,22 +1,22 @@
 [
   {
     "instrument": "BANKNIFTY",
-    "_notes": "VERIFIED 2026-09-09 directly on the VM: .run/training_view/training_view_banknifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (428 days, 60 features, source_collection=phase1_market_snapshots_hist). Windows below fit entirely inside that range.",
+    "_notes": "VERIFIED 2026-09-09: training_view_banknifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (428 days). Validation window widened to 6.5 weeks (2026-09-10, after MIN_VALID_ROWS_FOR_CALIBRATION was added) -- the ORIGINAL 2-week valid window (06-16..06-30) here caused isotonic calibration to collapse genuinely different market days onto identical probabilities, inflating auto-picked thresholds to unreachable extremes. Never shrink valid below ~5,000 rows again.",
     "data_dir": ".run/training_view/training_view_banknifty.csv.gz",
     "output_dir": ".run/overnight_study/banknifty",
     "candidates": [
       {
         "candidate_id": "BANKNIFTY_010pct", "label_pct": 0.10,
-        "train_start": "2024-11-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
+        "train_start": "2024-11-01", "train_end": "2026-05-15",
+        "valid_start": "2026-05-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
         "n_trials": 60
       },
       {
         "candidate_id": "BANKNIFTY_015pct", "label_pct": 0.15,
-        "train_start": "2024-11-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
+        "train_start": "2024-11-01", "train_end": "2026-05-15",
+        "valid_start": "2026-05-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
         "n_trials": 60
@@ -25,22 +25,22 @@
   },
   {
     "instrument": "NIFTY",
-    "_notes": "VERIFIED 2026-09-09: .run/training_view/training_view_nifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (428 days, 60 features, source_collection=phase1_market_snapshots_hist_nifty). Same windows as BankNifty.",
+    "_notes": "Same fix and reasoning as BANKNIFTY -- see its _notes above.",
     "data_dir": ".run/training_view/training_view_nifty.csv.gz",
     "output_dir": ".run/overnight_study/nifty",
     "candidates": [
       {
         "candidate_id": "NIFTY_010pct", "label_pct": 0.10,
-        "train_start": "2024-11-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
+        "train_start": "2024-11-01", "train_end": "2026-05-15",
+        "valid_start": "2026-05-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
         "n_trials": 60
       },
       {
         "candidate_id": "NIFTY_015pct", "label_pct": 0.15,
-        "train_start": "2024-11-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
+        "train_start": "2024-11-01", "train_end": "2026-05-15",
+        "valid_start": "2026-05-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
         "n_trials": 60
@@ -49,14 +49,14 @@
   },
   {
     "instrument": "FINNIFTY",
-    "_notes": "VERIFIED 2026-09-09: .run/training_view/training_view_finnifty.manifest.json confirms 2024-11-01..2026-07-31 coverage (359 days -- fewer than BankNifty/NIFTY's 428, some gaps, but the date range matches). Prior finding: FINNIFTY has no edge at ANY threshold (project_finnifty_dormancy_root_cause_2026-09-05.md) -- included for completeness/audit trail, not because a win is expected.",
+    "_notes": "Same fix and reasoning as BANKNIFTY -- see its _notes above. Prior finding: FINNIFTY has no edge at ANY threshold (project_finnifty_dormancy_root_cause_2026-09-05.md) -- included for completeness/audit trail, not because a win is expected.",
     "data_dir": ".run/training_view/training_view_finnifty.csv.gz",
     "output_dir": ".run/overnight_study/finnifty",
     "candidates": [
       {
         "candidate_id": "FINNIFTY_010pct", "label_pct": 0.10,
-        "train_start": "2024-11-01", "train_end": "2026-06-15",
-        "valid_start": "2026-06-16", "valid_end": "2026-06-30",
+        "train_start": "2024-11-01", "train_end": "2026-05-15",
+        "valid_start": "2026-05-16", "valid_end": "2026-06-30",
         "holdout_start": "2026-07-01", "holdout_end": "2026-07-31",
         "backtest_from": "2026-08-03", "backtest_to": "2026-09-03",
         "n_trials": 60
@@ -65,14 +65,14 @@
   },
   {
     "instrument": "SENSEX",
-    "_notes": "VERIFIED 2026-09-09: .run/training_view_sensex/training_view_sensex.manifest.json (note the DIFFERENT directory name -- not under .run/training_view/ like the other three) confirms coverage is ONLY 2026-01-01..2026-08-06 (146 days) -- much shorter/more recent than the others. Windows below are shrunk to fit; do not copy BankNifty's dates here.",
+    "_notes": "VERIFIED 2026-09-09: training_view_sensex.manifest.json confirms coverage is ONLY 2026-01-01..2026-08-06 (146 days) -- shorter/more recent than the others. Valid window widened to 6 weeks (2026-09-10, same calibration-resolution fix as the others) by shrinking train_end, holdout unchanged.",
     "data_dir": ".run/training_view_sensex/training_view_sensex.csv.gz",
     "output_dir": ".run/overnight_study/sensex",
     "candidates": [
       {
         "candidate_id": "SENSEX_010pct", "label_pct": 0.10,
-        "train_start": "2026-01-01", "train_end": "2026-06-30",
-        "valid_start": "2026-07-01", "valid_end": "2026-07-15",
+        "train_start": "2026-01-01", "train_end": "2026-06-01",
+        "valid_start": "2026-06-02", "valid_end": "2026-07-15",
         "holdout_start": "2026-07-16", "holdout_end": "2026-08-06",
         "backtest_from": "2026-08-10", "backtest_to": "2026-09-03",
         "n_trials": 60
