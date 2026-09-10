@@ -18,3 +18,8 @@ google-cloud-storage>=2.0,<3
 pymongo>=4,<5
 optuna>=4,<5
 duckdb>=1,<2
+# pandas.to_parquet needs an engine -- ops/export_mongo_snapshots_to_parquet.py
+# (used to backfill BankNifty/FINNIFTY/SENSEX's stale backtest archives)
+# failed with this missing 2026-09-10, the fourth dependency in this same
+# family found only by actually running the real workflow.
+pyarrow>=17,<20
