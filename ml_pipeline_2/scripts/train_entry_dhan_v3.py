@@ -343,9 +343,21 @@ def run_hpo(X_train: pd.DataFrame, y_train: np.ndarray,
     return final, study.best_params, study.best_value
 
 
+DEFAULT_SEPARATION_THRESHOLDS = [0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
+
+
 def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
-             label: str = "holdout") -> Dict[str, Any]:
-    """Compute AUC, ECE, separation table."""
+             label: str = "holdout",
+             thresholds: Optional[List[float]] = None) -> Dict[str, Any]:
+    """Compute AUC, ECE, separation table.
+
+    `thresholds` used to hard-stop at 0.70 -- found 2026-09-10 (after
+    every one of a real 6-candidate study's own auto-picked thresholds
+    landed exactly on that ceiling) that this was silently truncating the
+    search: when the best operating point in a table sits at the edge of
+    what was tested, that's a signal the true optimum is untested, not
+    that the edge is genuinely best. Extended to 0.95 by default.
+    """
     from sklearn.metrics import roc_auc_score, brier_score_loss
     prob = model.predict_proba(X)[:, 1]
     auc   = float(roc_auc_score(y, prob))
@@ -368,7 +380,7 @@ def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
                              "conf": round(conf, 4), "acc": round(acc, 4)})
     # Separation
     sep = []
-    for thr in [0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70]:
+    for thr in (thresholds if thresholds is not None else DEFAULT_SEPARATION_THRESHOLDS):
         fired = prob >= thr
         if fired.sum() == 0 or (~fired).sum() == 0:
             sep.append({"thr": thr, "degenerate": True})
