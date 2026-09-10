@@ -31,8 +31,41 @@ import pandas as pd
 HORIZONS_MIN = (5, 10, 15, 30)
 
 
+# Verified 2026-09-10 (project_untapped_feature_signal_gap_2026-09-08.md's
+# correction): these categories were previously invisible to every
+# instrument's training view purely because _feature_list() below only
+# looked at 3 old bundles' declared features, a closed loop — NOT because
+# the data doesn't exist. Directly confirmed via build_feature_row against
+# real, current (2026-09-03) BankNifty AND FINNIFTY snapshots: every name
+# here resolves to a real, non-null value on at least one of those two
+# instruments. Deliberately EXCLUDES mtf_derived's RSI/MACD/ATR/BB and the
+# whole dir_score family (dir_score/dir_structure/dir_vwap_hold/dir_ema/
+# dir_pressure/dir_session_pos) and adx_14/range_10/range_30/
+# candle_overlap_10/vol_spike_ratio — all confirmed 100% NULL system-wide
+# on the same real snapshots, despite being declared in
+# snapshot_app.core.stage_views._STAGE_FIELD_SPECS and present as dict
+# keys in every document. That's a live feature-computation gap, not a
+# training-view problem — don't add them here until that's separately
+# fixed and re-verified, or every row for these columns will just be
+# constant-median-imputed noise.
+_VERIFIED_NEW_FEATURES: tuple[str, ...] = (
+    # opening_range — fully populated, both instruments checked.
+    "opening_range_ready", "or_width_pct", "price_vs_orh", "price_vs_orl",
+    "orh_broken", "orl_broken", "bars_since_or_break_up", "bars_since_or_break_down",
+    # chain_aggregates — verified-populated subset only (pcr_change_*,
+    # total_ce_volume/pe_volume, ce_pe_volume_diff, and (for FINNIFTY
+    # specifically) max_pain/distance_to_max_pain_pct are null — excluded).
+    "pcr", "ce_pe_oi_diff", "atm_straddle_pct", "atm_straddle_price", "atm_oi_ratio",
+    # ladder_aggregates — verified-populated subset (near_atm_volume_concentration
+    # is null on both instruments — excluded).
+    "near_atm_pcr", "near_atm_oi_ratio", "near_atm_oi_concentration",
+    "oi_sum_m3_p3_ce", "oi_sum_m3_p3_pe", "vol_sum_m3_p3_ce", "vol_sum_m3_p3_pe",
+)
+
+
 def _feature_list() -> list[str]:
-    """The union of the live entry bundles' feature lists — what serving reads."""
+    """The union of the live entry bundles' feature lists, plus the
+    verified-real new feature categories above — what serving reads."""
     import joblib
     feats: list[str] = []
     for p in ("/app/models/dhan_entry_bundle_v3.joblib",
@@ -47,6 +80,9 @@ def _feature_list() -> list[str]:
             pass
     if not feats:
         raise SystemExit("no model bundles found to derive the feature list")
+    for f in _VERIFIED_NEW_FEATURES:
+        if f not in feats:
+            feats.append(f)
     return feats
 
 
