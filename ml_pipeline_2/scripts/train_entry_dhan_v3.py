@@ -345,6 +345,16 @@ def run_hpo(X_train: pd.DataFrame, y_train: np.ndarray,
 
 DEFAULT_SEPARATION_THRESHOLDS = [0.30, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
 
+# Isotonic calibration fits a piecewise-constant (step-function) mapping --
+# too few validation rows produce a coarse, under-resolved mapping. Found
+# 2026-09-10: a 2-week (~3,200 row) validation window collapsed genuinely
+# different market days (VIX 11.71 vs 12.62 vs 11.76, ADX 100 vs 28 vs 54)
+# onto the EXACT SAME calibrated probability, which silently inflated a
+# model's "best" threshold to an unreachable extreme while the true,
+# properly-resolved ceiling was far lower and reachable. A ~9,000+ row
+# (6+ week) validation window resolved this cleanly in the same real case.
+MIN_VALID_ROWS_FOR_CALIBRATION = 5000
+
 
 def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
              label: str = "holdout",
@@ -508,6 +518,16 @@ def main(argv: List[str] | None = None) -> int:
     model, best_params, valid_auc = run_hpo(X_train, y_train, X_valid, y_valid, args.n_trials)
 
     # ── Calibration ───────────────────────────────────────────────────────────
+    if len(y_valid) < MIN_VALID_ROWS_FOR_CALIBRATION:
+        log.warning(
+            "Validation set has only %d rows (< %d) -- isotonic calibration on this few "
+            "points can produce a coarse, under-resolved mapping that collapses genuinely "
+            "different market conditions onto identical probabilities, silently distorting "
+            "any threshold picked from this model's separation_table. Widen --valid-start/"
+            "--valid-end (by shrinking --train-end, not touching holdout) before trusting "
+            "this bundle's thresholds for anything other than a smoke test.",
+            len(y_valid), MIN_VALID_ROWS_FOR_CALIBRATION,
+        )
     log.info("Fitting isotonic calibration on validation set...")
     from sklearn.calibration import CalibratedClassifierCV
     try:
@@ -575,6 +595,7 @@ def main(argv: List[str] | None = None) -> int:
             "valid_window":   f"{args.valid_start}..{args.valid_end}",
             "holdout_window": f"{args.holdout_start}..{args.holdout_end}",
             "n_train":        int(len(y_train)),
+            "n_valid":        int(len(y_valid)),
             "n_holdout":      int(len(y_hold)),
             "pos_rate_train": round(float(y_train.mean()), 4),
             "pos_rate_hold":  round(float(y_hold.mean()),  4),
@@ -585,6 +606,7 @@ def main(argv: List[str] | None = None) -> int:
             "label_pt":       args.label_pt if args.label_pt is not None else (None if args.label_pct is not None else LABEL_PT_THRESHOLD),
             "label_horizon_min": args.label_horizon_min,
             "calibration":    "isotonic_prefit_on_valid",
+            "calibration_valid_rows_sufficient": len(y_valid) >= MIN_VALID_ROWS_FOR_CALIBRATION,
         },
     }
 
