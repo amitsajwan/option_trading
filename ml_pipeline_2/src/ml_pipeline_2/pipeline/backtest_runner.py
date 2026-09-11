@@ -233,6 +233,28 @@ def run_backtest(
         # Setting it here routes to the SAME default (composite) dispatch live
         # trading actually uses.
         "STRATEGY_PROFILE_ID": "trader_master_live_v1",
+        # Found 2026-09-11: SnapshotAccessor.is_valid_entry_phase's fallback
+        # comment claims a default window of "09:45-14:30", but real
+        # production/historical snapshots carry their OWN session_phase
+        # field (checked first, priority over that fallback) using a
+        # DIFFERENT taxonomy: PRE_OPEN(09:15)/MORNING(09:45)/ACTIVE(11:30)/
+        # PRE_CLOSE(14:30)/CLOSED(15:15) -- confirmed via direct Mongo query
+        # on real BankNifty snapshots. Since is_valid_entry_phase checks
+        # session_phase=="ACTIVE" specifically, the REAL default window is
+        # 11:30-14:29, not 09:45-14:30 -- silently excluding the entire
+        # 09:45-11:29 "MORNING" phase the entry model IS trained on
+        # (train_entry_dhan_v3.py's SESSION_START_MIN=9:45, by raw clock
+        # minute, blind to this phase taxonomy). This discarded real,
+        # legitimately-trained-on signal on every backtest all week.
+        # Verified fix: setting these two explicitly (matching the
+        # model's own training window exactly, 09:45-15:05) took a
+        # BankNifty candidate from 0 trades to 12 real, profitable ones
+        # in the same backtest window -- confirmed the extra 14:30-15:05
+        # minutes add nothing further (same result with END_IST=14:30).
+        # BACKTEST-ONLY -- this does not touch live trading config
+        # (.env.compose); rolling it out to live is a separate decision.
+        "ENTRY_WINDOW_START_IST": "09:45",
+        "ENTRY_WINDOW_END_IST": "15:05",
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
         "RISK_LIVE_MIN_GRADE": "GOOD",
