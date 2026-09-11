@@ -60,6 +60,14 @@ _VERIFIED_NEW_FEATURES: tuple[str, ...] = (
     # is null on both instruments — excluded).
     "near_atm_pcr", "near_atm_oi_ratio", "near_atm_oi_concentration",
     "oi_sum_m3_p3_ce", "oi_sum_m3_p3_pe", "vol_sum_m3_p3_ce", "vol_sum_m3_p3_pe",
+    # Added 2026-09-11: verified real, genuinely-varying (not a stuck default)
+    # on BankNifty across 5 different real trading days -- found missing
+    # while building a direction classifier (these are 2 of the CURRENT
+    # hand-tuned composite direction scorer's own weighted inputs, e.g.
+    # price_vs_vwap at ENTRY_DIR_W_VWAP, iv skew at ENTRY_DIR_W_IV_SKEW --
+    # a trained model couldn't even see what the existing scorer already
+    # uses without these).
+    "price_vs_vwap", "atm_ce_iv", "atm_pe_iv",
 )
 
 
