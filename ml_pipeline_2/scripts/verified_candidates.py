@@ -69,11 +69,32 @@ CANDIDATES: dict[str, Candidate] = {
             "EXIT_TRAILING_ACTIVATION_PCT": "0.008",
             "EXIT_TRAILING_TRAIL_PCT": "0.003",
             "EXIT_MAX_LOSS_PCT": "0.05",
+            # Pinned 2026-09-13 -- these used to be inherited silently from
+            # whatever the live container's ambient env happened to be, which
+            # is exactly what let the EXIT_STRATEGY_MODE bug (see notes) go
+            # undetected: a re-run's result depended on config that lived
+            # nowhere in this file. Now deployed as BANKNIFTY_EXIT_STRATEGY_MODE
+            # in docker-compose.gcp.yml too, so this is belt-and-suspenders,
+            # not the only place it's set.
+            "EXIT_STRATEGY_MODE": "scalper",
+            "EXIT_PREMIUM_TARGET_PCT": "0.015",
+            "EXIT_SCALPER_STALE_BARS": "15",
         },
-        verified_result="14 live trades, 64.3% win, PF=1.95, +0.79% return",
-        memory_ref="project_banknifty_entry_system_status_2026-09-11 (stop-tuned 2026-09-12)",
+        verified_result="17 live trades under EXIT_STRATEGY_MODE=scalper (re-verified "
+                         "2026-09-13; the original '14 trades, PF=1.95' figure was run "
+                         "under the ambient EXIT_STRATEGY_MODE=adaptive that was live at "
+                         "the time -- NOT reproducible from this file alone until the pin "
+                         "above was added. See memory_ref for the full story.)",
+        memory_ref="project_banknifty_entry_system_status_2026-09-11 (stop-tuned "
+                   "2026-09-12); project_straddle_design_proxy_test_2026-09-13 "
+                   "(EXIT_STRATEGY_MODE bug found + fixed, harness hermeticity gap)",
         notes="Most heavily scrutinized candidate -- 5+ pipeline bugs found and "
-              "fixed here first, direction forensics done (dead). Deployed paper-only.",
+              "fixed here first, direction forensics done (dead). Deployed paper-only. "
+              "2026-09-13: found EXIT_STRATEGY_MODE was a single unnamespaced switch "
+              "shared by all 5 instruments and defaulting to 'adaptive' live -- 9 of 17 "
+              "real trades were routing through a never-tuned lottery sub-stack, losing "
+              "-5.58% vs. a forced-scalper -1.53% on the same trades. Fixed at the infra "
+              "level (namespaced + pinned to scalper) AND pinned here for hermeticity.",
     ),
     "NIFTY": Candidate(
         instrument="NIFTY",
@@ -84,6 +105,11 @@ CANDIDATES: dict[str, Candidate] = {
         holdout_end="2026-07-31",
         extra_config={
             "EXIT_MAX_LOSS_PCT": "0.15",
+            # Pinned 2026-09-13, same reasoning as BankNifty above. NIFTY's
+            # 5-trade sample never actually exercised the lottery path (0/5
+            # were BREAKOUT/TRENDING at entry) so this is a no-known-effect
+            # hermeticity fix, not a result-changing one.
+            "EXIT_STRATEGY_MODE": "scalper",
         },
         verified_result="5 live trades, 80% win, PF=4.71, +4.26% return",
         memory_ref="project_nifty_entry_system_status_2026-09-11 (stop-tuned 2026-09-12)",
@@ -98,7 +124,19 @@ CANDIDATES: dict[str, Candidate] = {
         date_from="2026-07-16",
         date_to="2026-08-06",
         holdout_end="2026-07-15",
-        extra_config={},  # default exit -- its own sweep confirmed 0.10 is already optimal
+        extra_config={
+            # Pinned 2026-09-13 to the live container's actual ambient values
+            # at verification time (confirmed via `docker exec ... env`) --
+            # NOT changed from what was actually running, just made explicit
+            # so a future re-run can't silently drift if the live default
+            # ever changes. SENSEX has NOT been tested the way BankNifty/NIFTY
+            # were for whether adaptive/lottery routing helps or hurts here --
+            # this freezes current (untested) behavior, it doesn't validate it.
+            "EXIT_STRATEGY_MODE": "adaptive",
+            "EXIT_GIVEBACK_STOP_ENABLED": "true",
+            "EXIT_GIVEBACK_MIN_MFE": "0.03",
+            "EXIT_GIVEBACK_PCT": "0.09",
+        },
         verified_result="8 live trades, 75% win, PF=3.06, +4.02% return",
         memory_ref="project_sensex_entry_system_status_2026-09-11 (REOPENED 2026-09-12/13)",
         notes="Window is SENSEX's own holdout period -- its history ends 2026-08-06 "
@@ -106,7 +144,9 @@ CANDIDATES: dict[str, Candidate] = {
               "after the original 'closed negative' verdict could not be reproduced "
               "and its root cause was never found (6 hypotheses ruled out) -- see "
               "memory_ref for the full investigation. Deployed paper-only, "
-              "operator_halt added specifically for this deploy.",
+              "operator_halt added specifically for this deploy. NOT yet tested for "
+              "the EXIT_STRATEGY_MODE=adaptive/lottery-routing issue found on "
+              "BankNifty -- see extra_config comment.",
     ),
     "MIDCPNIFTY": Candidate(
         instrument="MIDCPNIFTY",
@@ -117,6 +157,12 @@ CANDIDATES: dict[str, Candidate] = {
         holdout_end="2026-08-06",
         extra_config={
             "EXIT_MAX_LOSS_PCT": "0.01",
+            # Pinned 2026-09-13, same reasoning as SENSEX above -- freezes
+            # current (untested) ambient behavior, doesn't validate it.
+            "EXIT_STRATEGY_MODE": "adaptive",
+            "EXIT_GIVEBACK_STOP_ENABLED": "true",
+            "EXIT_GIVEBACK_MIN_MFE": "0.03",
+            "EXIT_GIVEBACK_PCT": "0.09",
         },
         verified_result="13 live trades, 53.8% win, PF=4.84, +1.64% return",
         memory_ref="project_midcpnifty_entry_system_status_2026-09-11 (stop-tuned 2026-09-12)",
