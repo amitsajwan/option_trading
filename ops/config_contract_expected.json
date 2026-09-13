@@ -222,6 +222,26 @@
         "SELLER_IV_RANK_MIN",
         "SELLER_MIN_FREE_MARGIN_RS"
       ]
+    },
+    "option_trading-strategy_app_midcpnifty-1": {
+      "instrument": "MIDCPNIFTY",
+      "_comment": "2026-09-13: MIDCPNIFTY's first-ever deployment of any kind -- no prior trading history existed for this instrument before this. Deployed this session's verified entry candidate (midcpnifty_entry_010pct_v1.joblib, thr=0.60, EXIT_MAX_LOSS_PCT=0.01 -- swept from default 0.10, MIDCPNIFTY wants a dramatically tighter stop than every other instrument). PAPER-ONLY via an operator_halt file created proactively before first launch -- the compose command's own '--rollout-stage paper' default does NOT actually gate real execution for the deterministic engine (verified in code: rollout_stage is only read by the retired ml_pure engine's runtime guard), so operator_halt is the real safety gate here, not the rollout flag's name.",
+      "expect": {
+        "ENTRY_ML_MODEL_PATH": "/app/models/midcpnifty_entry_010pct_v1.joblib",
+        "ENTRY_ML_MIN_PROB": "0.60",
+        "ENTRY_ML_MAX_NAN_FEATURES": "2",
+        "MIDCPNIFTY_LOT_SIZE": "120",
+        "ML_ENTRY_DIRECTION_MODE": "composite",
+        "ENTRY_DIR_W_ML": "0",
+        "RISK_LIVE_MIN_GRADE": "GOOD",
+        "RISK_MAX_LOTS_PER_TRADE": "1",
+        "DEPTH_FEED_ENABLED": "1",
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
+      },
+      "require_nonempty": [
+        "EXIT_STRATEGY_MODE",
+        "EXIT_MAX_LOSS_PCT"
+      ]
     }
   },
   "must_match_across_services": [
