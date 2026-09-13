@@ -4,13 +4,13 @@
   "services": {
     "option_trading-strategy_app-1": {
       "instrument": "BANKNIFTY",
-      "_comment": "2026-08-10: calculated-risk loosening (user decision after a 'no trades' review) -- ENTRY_ALLOW_CHOP turned on (CHOP was BankNifty's single largest regime bucket that day, 38% of bars, previously fully excluded). ENTRY_ML_MIN_PROB deliberately left at its original 0.6, NOT lowered alongside it -- reverted an initial 0.6->0.55 change same-day to isolate CHOP as the only variable; lowering the threshold inside a regime being reopened specifically for false-signal risk would have compounded, not just added to, that risk, and muddied which change did what. Revisit the threshold as its own decision once CHOP-alone has been observed. PRE_EXPIRY and STRATEGY_MIN_CONFIDENCE deliberately left untouched -- PRE_EXPIRY's risk is an unprotected gap (-16.3% in one bar, a different risk category than CHOP's 'market didn't move' losses), decided separately. 2026-08-20: DIRECTION_ML_MIN_MARGIN turned on at 0.05 -- BankNifty is the only instrument on ML-primary direction_ml mode (NIFTY/FINNIFTY/SENSEX all use the more conservative composite mode with their own margin gates); direction_dhan_bn_v3.joblib's holdout AUC is a weak 0.6165, and the margin gate had existed in code since 2026-07-19 but was left at its 0-disables-it default, so real historical direction calls included genuine near-coinflip commits (e.g. ce_prob=0.5194) with nothing to abstain them. Calibrated 0.05 against the real live probability distribution (21 historical direction_ml decisions: 2 fell below this margin, 19 above) -- filters the most degenerate near-toss-up cases without meaningfully cutting into real trade frequency, which was the whole reason CHOP got reopened in the first place. 2026-09-04: root-caused the Jul 20-23 buyer regression (dhan_entry_015pct_v1 was a known-weak model, holdout AUC 0.618, deployed despite explicit gate failures -- see .env.compose history). A same-methodology 15-min retrain on now-fully-clean data only reached AUC 0.636, confirming BankNifty's ceiling at this horizon isn't a data-pipeline artifact. A forgotten 2026-07-12 5-min-horizon rare-label approach scored much better (0.739 on stale data); retrained fresh it reaches holdout AUC 0.725, ship gates 3/4 pass (fails separation). Engine-level, capital-weighted backtest (Feb-Jul 2026, tier==live) showed only +0.52% return on capital vs the old model's +0.58% -- essentially flat, with worse tail risk -- so this is NOT a proven edge. Deployed anyway 2026-09-04 as a deliberate live trial per user instruction, to observe real trades before deciding whether to keep it, tune it further, or revert to dhan_entry_015pct_v1.joblib (untouched on disk, zero-file-change rollback).",
+      "_comment": "2026-08-10: calculated-risk loosening (user decision after a 'no trades' review) -- ENTRY_ALLOW_CHOP turned on (CHOP was BankNifty's single largest regime bucket that day, 38% of bars, previously fully excluded). ENTRY_ML_MIN_PROB deliberately left at its original 0.6, NOT lowered alongside it -- reverted an initial 0.6->0.55 change same-day to isolate CHOP as the only variable; lowering the threshold inside a regime being reopened specifically for false-signal risk would have compounded, not just added to, that risk, and muddied which change did what. Revisit the threshold as its own decision once CHOP-alone has been observed. PRE_EXPIRY and STRATEGY_MIN_CONFIDENCE deliberately left untouched -- PRE_EXPIRY's risk is an unprotected gap (-16.3% in one bar, a different risk category than CHOP's 'market didn't move' losses), decided separately. 2026-08-20: DIRECTION_ML_MIN_MARGIN turned on at 0.05 -- BankNifty is the only instrument on ML-primary direction_ml mode (NIFTY/FINNIFTY/SENSEX all use the more conservative composite mode with their own margin gates); direction_dhan_bn_v3.joblib's holdout AUC is a weak 0.6165, and the margin gate had existed in code since 2026-07-19 but was left at its 0-disables-it default, so real historical direction calls included genuine near-coinflip commits (e.g. ce_prob=0.5194) with nothing to abstain them. Calibrated 0.05 against the real live probability distribution (21 historical direction_ml decisions: 2 fell below this margin, 19 above) -- filters the most degenerate near-toss-up cases without meaningfully cutting into real trade frequency, which was the whole reason CHOP got reopened in the first place. 2026-09-04: root-caused the Jul 20-23 buyer regression (dhan_entry_015pct_v1 was a known-weak model, holdout AUC 0.618, deployed despite explicit gate failures -- see .env.compose history). A same-methodology 15-min retrain on now-fully-clean data only reached AUC 0.636, confirming BankNifty's ceiling at this horizon isn't a data-pipeline artifact. A forgotten 2026-07-12 5-min-horizon rare-label approach scored much better (0.739 on stale data); retrained fresh it reaches holdout AUC 0.725, ship gates 3/4 pass (fails separation). Engine-level, capital-weighted backtest (Feb-Jul 2026, tier==live) showed only +0.52% return on capital vs the old model's +0.58% -- essentially flat, with worse tail risk -- so this is NOT a proven edge. Deployed anyway 2026-09-04 as a deliberate live trial per user instruction, to observe real trades before deciding whether to keep it, tune it further, or revert to dhan_entry_015pct_v1.joblib (untouched on disk, zero-file-change rollback). 2026-09-13: deployed this session's verified paper-only entry candidate (banknifty_entry_010pct_v1.joblib, thr=0.30, composite direction mode -- switches off direction_ml for this specific model swap; the direction_dhan_bn_v3.joblib decision documented above was for a different model and is not reversed by this). EXIT_GIVEBACK_MIN_MFE/PCT/TRAILING_* and EXIT_MAX_LOSS_PCT are now BankNifty-specific via BANKNIFTY_-namespaced overrides (see docker-compose.gcp.yml), no longer expected to match other instruments. operator_halt unaffected -- still paper-only.",
       "expect": {
-        "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_rarelabel_5min_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.25",
+        "ENTRY_ML_MODEL_PATH": "/app/models/banknifty_entry_010pct_v1.joblib",
+        "ENTRY_ML_MIN_PROB": "0.30",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
         "SMART_STRIKE_MIN_PREMIUM": "100",
-        "ML_ENTRY_DIRECTION_MODE": "direction_ml",
+        "ML_ENTRY_DIRECTION_MODE": "composite",
         "DIRECTION_ML_MODEL_PATH": "/app/models/direction_dhan_bn_v3.joblib",
         "DIRECTION_ML_MIN_MARGIN": "0.05",
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
@@ -31,9 +31,9 @@
     },
     "option_trading-strategy_app_nifty-1": {
       "instrument": "NIFTY",
-      "_comment": "2026-08-10: calculated-risk loosening, same isolated pattern as BankNifty -- ENTRY_ALLOW_CHOP on (CHOP was ~20% of NIFTY's bars over a 3-day sample, previously fully excluded), ENTRY_ML_MIN_PROB left untouched to isolate the variable. Sourced from the namespaced NIFTY_ENTRY_ALLOW_CHOP in .env.compose, not the bare var BankNifty/historical/sim containers use. 2026-08-20: retrained on the fully-fixed historical data (schema-drift + IV-scale + ctx_gap fixes) -- v1 holdout AUC 0.6294/ship_gates none pass -> v2 holdout AUC 0.7327/ship_gates all pass. ENTRY_ML_MIN_PROB left untouched, same isolate-the-variable discipline.",
+      "_comment": "2026-08-10: calculated-risk loosening, same isolated pattern as BankNifty -- ENTRY_ALLOW_CHOP on (CHOP was ~20% of NIFTY's bars over a 3-day sample, previously fully excluded), ENTRY_ML_MIN_PROB left untouched to isolate the variable. Sourced from the namespaced NIFTY_ENTRY_ALLOW_CHOP in .env.compose, not the bare var BankNifty/historical/sim containers use. 2026-08-20: retrained on the fully-fixed historical data (schema-drift + IV-scale + ctx_gap fixes) -- v1 holdout AUC 0.6294/ship_gates none pass -> v2 holdout AUC 0.7327/ship_gates all pass. ENTRY_ML_MIN_PROB left untouched, same isolate-the-variable discipline. 2026-09-13: deployed this session's verified paper-only entry candidate (nifty_entry_010pct_v1.joblib, thr=0.50 unchanged, EXIT_MAX_LOSS_PCT=0.15 via NIFTY_EXIT_MAX_LOSS_PCT override -- opposite direction from BankNifty, confirmed instrument-specific by an isolated sweep). operator_halt unaffected -- still paper-only.",
       "expect": {
-        "ENTRY_ML_MODEL_PATH": "/app/models/nifty_entry_015pct_v2.joblib",
+        "ENTRY_ML_MODEL_PATH": "/app/models/nifty_entry_010pct_v1.joblib",
         "ENTRY_ML_MIN_PROB": "0.5",
         "ENTRY_ML_MAX_NAN_FEATURES": "10",
         "NIFTY_LOT_SIZE": "65",
@@ -226,7 +226,6 @@
   },
   "must_match_across_services": [
     "EXIT_GIVEBACK_STOP_ENABLED",
-    "EXIT_GIVEBACK_MIN_MFE",
     "EXIT_POLICY_STACK_ENABLED",
     "EXIT_SCALPER_STALE_BARS",
     "ALERT_ENABLED",
@@ -248,7 +247,7 @@
     },
     {
       "weight_key": "ENTRY_DIR_W_ML",
-      "weight_default": 0.20,
+      "weight_default": 0.2,
       "gate_key": "ML_ENTRY_DIRECTION_MODE",
       "gate_equals": "composite",
       "requires_nonempty": "DIRECTION_ML_MODEL_PATH",
