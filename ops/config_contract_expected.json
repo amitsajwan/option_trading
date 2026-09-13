@@ -74,7 +74,7 @@
     },
     "option_trading-strategy_app_sensex-1": {
       "instrument": "SENSEX",
-      "_comment": "2026-09-05: retrained on a fresh full re-backfill (Jan-Aug 2026, post ctx_gap_pct/iv_percentile fix) -- v2 holdout AUC 0.7051, ship_gates ALL_PASS (first SENSEX model to clear every gate, v1 failed auc>=0.70). Capital-weighted engine backtest (Feb-Aug 2026, real rupee P&L) confirmed it beats v1 in practice too: +Rs9,864/+2.02% return @thr=0.50 vs v1's +Rs4,590/+1.50% @thr=0.70 (v1's own threshold was picked for a different, since-superseded prob distribution). max_nan_features raised 2->3 to match v2's own training-time value; NOTE the capital-weighted backtest itself ran with no NaN gate at all (a methodology gap discovered post-backtest) so live behavior during the 09:15-09:45 warmup window should be watched for artifact trades before trusting this threshold long-term. User-approved deploy, still paper mode (EXECUTION_ADAPTER=paper) -- zero real-money exposure. v1 stays in repo unreferenced for rollback. 2026-09-13: deployed this session's verified paper-only entry candidate (sensex_entry_010pct_v1.joblib, thr=0.50 unchanged, default exit policy -- SENSEX's own sweep confirmed the default EXIT_MAX_LOSS_PCT=0.10 already sits at the optimal plateau). An operator_halt file was added for SENSEX specifically as part of this deploy -- unlike BankNifty/NIFTY, SENSEX had no halt gate before this and its buyer path had genuine real-execution capability (confirmed recent tier=live trades). Adding the halt keeps this rollout paper-only rather than silently changing real trading behavior.",
+      "_comment": "2026-09-05: retrained on a fresh full re-backfill (Jan-Aug 2026, post ctx_gap_pct/iv_percentile fix) -- v2 holdout AUC 0.7051, ship_gates ALL_PASS (first SENSEX model to clear every gate, v1 failed auc>=0.70). Capital-weighted engine backtest (Feb-Aug 2026, real rupee P&L) confirmed it beats v1 in practice too: +Rs9,864/+2.02% return @thr=0.50 vs v1's +Rs4,590/+1.50% @thr=0.70 (v1's own threshold was picked for a different, since-superseded prob distribution). max_nan_features raised 2->3 to match v2's own training-time value; NOTE the capital-weighted backtest itself ran with no NaN gate at all (a methodology gap discovered post-backtest) so live behavior during the 09:15-09:45 warmup window should be watched for artifact trades before trusting this threshold long-term. User-approved deploy, still paper mode (EXECUTION_ADAPTER=paper) -- zero real-money exposure. v1 stays in repo unreferenced for rollback. 2026-09-13: deployed this session's verified paper-only entry candidate (sensex_entry_010pct_v1.joblib, thr=0.50 unchanged, default exit policy -- SENSEX's own sweep confirmed the default EXIT_MAX_LOSS_PCT=0.10 already sits at the optimal plateau). An operator_halt file was added for SENSEX specifically as part of this deploy -- unlike BankNifty/NIFTY, SENSEX had no halt gate before this and its buyer path had genuine real-execution capability (confirmed recent tier=live trades). Adding the halt keeps this rollout paper-only rather than silently changing real trading behavior. 2026-09-13: switched to budget_per_trade sizing (~50k notional/trade, RISK_MAX_LOTS_PER_TRADE raised 1->20 as a ceiling not a target) at user request to properly utilize allocated capital rather than hard-cap every trade at 1 lot.",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/sensex_entry_010pct_v1.joblib",
         "ENTRY_ML_MIN_PROB": "0.50",
@@ -83,9 +83,11 @@
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
         "RISK_LIVE_MIN_GRADE": "GOOD",
-        "RISK_MAX_LOTS_PER_TRADE": "1",
+        "RISK_MAX_LOTS_PER_TRADE": "20",
         "DEPTH_FEED_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1",
+        "RISK_LOT_SIZING_MODE": "budget_per_trade",
+        "RISK_NOTIONAL_PER_TRADE": "50000"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -225,7 +227,7 @@
     },
     "option_trading-strategy_app_midcpnifty-1": {
       "instrument": "MIDCPNIFTY",
-      "_comment": "2026-09-13: MIDCPNIFTY's first-ever deployment of any kind -- no prior trading history existed for this instrument before this. Deployed this session's verified entry candidate (midcpnifty_entry_010pct_v1.joblib, thr=0.60, EXIT_MAX_LOSS_PCT=0.01 -- swept from default 0.10, MIDCPNIFTY wants a dramatically tighter stop than every other instrument). PAPER-ONLY via an operator_halt file created proactively before first launch -- the compose command's own '--rollout-stage paper' default does NOT actually gate real execution for the deterministic engine (verified in code: rollout_stage is only read by the retired ml_pure engine's runtime guard), so operator_halt is the real safety gate here, not the rollout flag's name.",
+      "_comment": "2026-09-13: MIDCPNIFTY's first-ever deployment of any kind -- no prior trading history existed for this instrument before this. Deployed this session's verified entry candidate (midcpnifty_entry_010pct_v1.joblib, thr=0.60, EXIT_MAX_LOSS_PCT=0.01 -- swept from default 0.10, MIDCPNIFTY wants a dramatically tighter stop than every other instrument). PAPER-ONLY via an operator_halt file created proactively before first launch -- the compose command's own '--rollout-stage paper' default does NOT actually gate real execution for the deterministic engine (verified in code: rollout_stage is only read by the retired ml_pure engine's runtime guard), so operator_halt is the real safety gate here, not the rollout flag's name. 2026-09-13: switched to budget_per_trade sizing (~50k notional/trade). This also fixes a real concentration risk: the old risk-based (stop-distance-driven) formula would have sized MIDCPNIFTY up to ~15 lots for the same risk budget that gives BankNifty only ~2, since MIDCPNIFTY's stop is the tightest of any instrument -- budget_per_trade sizes off premium x lot_size directly, independent of stop distance, avoiding that skew.",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/midcpnifty_entry_010pct_v1.joblib",
         "ENTRY_ML_MIN_PROB": "0.60",
@@ -234,9 +236,11 @@
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "ENTRY_DIR_W_ML": "0",
         "RISK_LIVE_MIN_GRADE": "GOOD",
-        "RISK_MAX_LOTS_PER_TRADE": "1",
+        "RISK_MAX_LOTS_PER_TRADE": "20",
         "DEPTH_FEED_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1",
+        "RISK_LOT_SIZING_MODE": "budget_per_trade",
+        "RISK_NOTIONAL_PER_TRADE": "50000"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
