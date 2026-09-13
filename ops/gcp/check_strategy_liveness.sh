@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Silent-consumer liveness probe (2026-07-17). Twice on 2026-07-16 the buyer
-# strategies went silent mid-session on a stale Redis consumer lock: zero error
-# logs, zero new decision traces, snapshots flowing fine upstream. This probe
-# alerts on the one signal that catches that failure mode: no fresh decision
-# trace during market hours.
+# Silent-consumer liveness probe (2026-07-17, extended 2026-09-13). Twice on
+# 2026-07-16 the buyer strategies went silent mid-session on a stale Redis
+# consumer lock: zero error logs, zero new decision traces, snapshots flowing
+# fine upstream. This probe alerts on the one signal that caught that failure
+# mode: no fresh decision trace during market hours.
+#
+# 2026-09-13: extended with an always-on container-down check after finding
+# two real-money seller containers had been dead for 5 days with zero alerts
+# (see the check_container_up comment below) -- the original version only
+# ever looked at buyer (strategy_app*) containers that were already running.
 #
 # Install: ops/gcp/install_liveness_units.sh (systemd timer, every 5 min).
 # Test:    bash check_strategy_liveness.sh --force
@@ -11,15 +16,6 @@ set -u
 REPO=/opt/option_trading
 MAX_AGE_MIN=6
 FORCE=${1:-}
-
-# Market hours gate (IST): Mon-Fri 09:20-15:30, unless --force
-now_ist=$(TZ=Asia/Kolkata date '+%u %H%M')
-dow=${now_ist% *}; hhmm=${now_ist#* }
-if [ "$FORCE" != "--force" ]; then
-  [ "$dow" -gt 5 ] && exit 0
-  [ "$hhmm" -lt 0920 ] && exit 0
-  [ "$hhmm" -gt 1530 ] && exit 0
-fi
 
 TOKEN=$(sudo grep -E '^ALERT_TELEGRAM_TOKEN=' "$REPO/.env.compose" | cut -d= -f2-)
 CHAT=$(sudo grep -E '^ALERT_TELEGRAM_CHAT_ID=' "$REPO/.env.compose" | cut -d= -f2-)
@@ -32,6 +28,50 @@ alert() {
       -d chat_id="${CHAT}" -d text="⚠️ ${msg}" >/dev/null || true
   fi
 }
+
+# Container-down check (2026-09-13): runs EVERY invocation, NOT gated to
+# market hours -- a real-money process dying at 15:50 IST shouldn't wait for
+# the next market-hours window to be noticed, and a seller can be mid-position
+# outside the buyer's 09:20-15:30 window too. Found seller_app (BankNifty) and
+# seller_app_nifty -- both REAL-MONEY live sellers -- had been SIGKILLed
+# (exit 137, RestartCount=0, consistent with an explicit stop/kill rather than
+# a crash the restart policy would have healed) 5 DAYS earlier with zero
+# alerting, because this probe only ever checked strategy_app* (buyer)
+# containers, and only ones already `docker ps`-running -- a fully stopped
+# container was invisible on both counts. Compares docker-compose's own
+# declared service list (deployment intent) against actual container state,
+# so any future instrument/service is covered automatically, same
+# instrument-generic principle as the buyer loop below.
+check_container_up() { # $1 = compose service name (e.g. seller_app_nifty)
+  local svc="$1" cname status
+  cname="option_trading-${svc}-1"
+  status=$(sudo docker inspect --format '{{.State.Status}}' "$cname" 2>/dev/null)
+  if [ -z "$status" ]; then
+    return  # not deployed at all (e.g. seller_app_midcpnifty, cold-start) -- not an error
+  fi
+  if [ "$status" != "running" ]; then
+    alert "${cname}: container is '${status}', not running -- real-money process is DOWN. Check: sudo docker logs ${cname} --tail 50"
+  fi
+}
+
+for svc in $(cd "$REPO" && sudo docker compose --env-file .env.compose \
+               -f docker-compose.yml -f docker-compose.gcp.yml -f docker-compose.seller.yml \
+               config --services 2>/dev/null \
+               | grep -E '^(strategy_app|seller_app)' | grep -v historical | sort); do
+  check_container_up "$svc"
+done
+
+# Market hours gate (IST): Mon-Fri 09:20-15:30, unless --force. Only the
+# decision-trace staleness check below needs this (no new buyer decisions are
+# expected outside market hours anyway) -- the container-down check above
+# always runs.
+now_ist=$(TZ=Asia/Kolkata date '+%u %H%M')
+dow=${now_ist% *}; hhmm=${now_ist#* }
+if [ "$FORCE" != "--force" ]; then
+  [ "$dow" -gt 5 ] && exit 0
+  [ "$hhmm" -lt 0920 ] && exit 0
+  [ "$hhmm" -gt 1530 ] && exit 0
+fi
 
 check() { # $1 = label, $2 = trace collection
   local label="$1" coll="$2"
