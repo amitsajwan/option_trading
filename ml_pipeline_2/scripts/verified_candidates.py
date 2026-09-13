@@ -80,11 +80,17 @@ CANDIDATES: dict[str, Candidate] = {
             "EXIT_PREMIUM_TARGET_PCT": "0.015",
             "EXIT_SCALPER_STALE_BARS": "15",
         },
-        verified_result="17 live trades under EXIT_STRATEGY_MODE=scalper (re-verified "
-                         "2026-09-13; the original '14 trades, PF=1.95' figure was run "
-                         "under the ambient EXIT_STRATEGY_MODE=adaptive that was live at "
-                         "the time -- NOT reproducible from this file alone until the pin "
-                         "above was added. See memory_ref for the full story.)",
+        verified_result="18 live trades, 66.7% win, PF=3.27, +2.94% return, under "
+                         "EXIT_STRATEGY_MODE=scalper (re-verified 2026-09-13 against the "
+                         "properly-recreated container). The original '14 trades, PF=1.95' "
+                         "figure was run under the ambient EXIT_STRATEGY_MODE=adaptive that "
+                         "was live at the time -- NOT reproducible from this file alone "
+                         "until the pin above was added. Note the trade COUNT itself "
+                         "shifted (17 mid-fix -> 18 post-fix, not just the per-trade exit "
+                         "outcomes): switching exit policy changes which trades close as "
+                         "wins/losses/timing, which ripples into RISK_MAX_CONSECUTIVE_LOSSES "
+                         "/RISK_MAX_SESSION_TRADES gating on SUBSEQUENT entries -- expected "
+                         "knock-on effect, not a bug. See memory_ref for the full story.)",
         memory_ref="project_banknifty_entry_system_status_2026-09-11 (stop-tuned "
                    "2026-09-12); project_straddle_design_proxy_test_2026-09-13 "
                    "(EXIT_STRATEGY_MODE bug found + fixed, harness hermeticity gap)",
