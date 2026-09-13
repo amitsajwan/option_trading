@@ -124,6 +124,7 @@ logs/
 temp_*
 *.tmp
 .tmp_test/
+.run_tmp/
 credentials.json.backup
 credentials*.backup
 
