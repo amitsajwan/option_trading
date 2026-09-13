@@ -570,7 +570,15 @@ services:
       RISK_FRACTION_PCT: "${RISK_FRACTION_PCT:-0.01}"
 
       # ── Exit strategy mode ────────────────────────────────────────────────
-      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      # 2026-09-13: was a single unnamespaced switch shared by all 5 buyer
+      # instruments (the exact anti-pattern namespacing everywhere else in
+      # this file exists to avoid). Found real evidence it mattered: half of
+      # BankNifty's real trades were routing through the generic, buyer-era
+      # (June 2026) lottery sub-stack, never validated for this model --
+      # forcing scalper-only on those same trades improved them from -5.58%
+      # to -1.53% (+4.04pp, 9-trade sample). Pinned to scalper here now that
+      # it's namespaced; see project_straddle_design_proxy_test_2026-09-13.md.
+      EXIT_STRATEGY_MODE: "${BANKNIFTY_EXIT_STRATEGY_MODE:-${EXIT_STRATEGY_MODE:-scalper}}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
       # ── Trend-aware regime + trend-fade guard (2026-06-04 postmortem) ──────
       REGIME_TREND_ALIGNED_BONUS: "${REGIME_TREND_ALIGNED_BONUS:-0.0}"
@@ -2841,7 +2849,13 @@ services:
       RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_CONSECUTIVE_LOSSES: "3"
       ENTRY_TIERING_ENABLED: "true"
-      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      # 2026-09-13: namespaced (was the shared global switch, see BankNifty's
+      # block above for why). NIFTY's real trade sample never exercised the
+      # lottery sub-stack (0/5 trades were BREAKOUT/TRENDING at entry), so
+      # pinning scalper (via .env.compose) here is a no-known-effect safety
+      # alignment with what was actually tuned this engagement, not a
+      # result-changing fix.
+      EXIT_STRATEGY_MODE: "${NIFTY_EXIT_STRATEGY_MODE:-${EXIT_STRATEGY_MODE:-scalper}}"
       EXIT_MAX_LOSS_PCT: "${NIFTY_EXIT_MAX_LOSS_PCT:-${EXIT_MAX_LOSS_PCT:-0.10}}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
       # Model-horizon timestop: entry model predicts a move within 15 min; exit
@@ -2962,7 +2976,13 @@ services:
       RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_CONSECUTIVE_LOSSES: "3"
       ENTRY_TIERING_ENABLED: "true"
-      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      # 2026-09-13: namespaced (was the shared global switch -- see BankNifty's
+      # block for why that's a real risk: adaptive mode silently routes
+      # BREAKOUT/TRENDING trades through a never-tuned-for-this-instrument
+      # lottery sub-stack). NOT pinned to scalper here -- MIDCPNIFTY hasn't
+      # been tested against this the way BankNifty/NIFTY were; preserves
+      # current (adaptive, via the global var) behavior exactly.
+      EXIT_STRATEGY_MODE: "${MIDCPNIFTY_EXIT_STRATEGY_MODE:-${EXIT_STRATEGY_MODE:-scalper}}"
       EXIT_MAX_LOSS_PCT: "${MIDCPNIFTY_EXIT_MAX_LOSS_PCT:-${EXIT_MAX_LOSS_PCT:-0.10}}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
@@ -3076,7 +3096,10 @@ services:
       RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_CONSECUTIVE_LOSSES: "3"
       ENTRY_TIERING_ENABLED: "true"
-      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      # 2026-09-13: namespaced (was the shared global switch -- see BankNifty's
+      # block for why that's a real risk). NOT pinned -- FINNIFTY is closed
+      # negative/deprioritized, not touched here; preserves current behavior.
+      EXIT_STRATEGY_MODE: "${FINNIFTY_EXIT_STRATEGY_MODE:-${EXIT_STRATEGY_MODE:-scalper}}"
       EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
@@ -3203,7 +3226,11 @@ services:
       RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_CONSECUTIVE_LOSSES: "3"
       ENTRY_TIERING_ENABLED: "true"
-      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      # 2026-09-13: namespaced (was the shared global switch -- see BankNifty's
+      # block for why that's a real risk). NOT pinned here -- SENSEX hasn't
+      # been tested against this the way BankNifty/NIFTY were; preserves
+      # current (adaptive, via the global var) behavior exactly.
+      EXIT_STRATEGY_MODE: "${SENSEX_EXIT_STRATEGY_MODE:-${EXIT_STRATEGY_MODE:-scalper}}"
       EXIT_MAX_LOSS_PCT: "${SENSEX_EXIT_MAX_LOSS_PCT:-${EXIT_MAX_LOSS_PCT:-0.10}}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
