@@ -39,7 +39,7 @@ Splitting the 56-trade Phase 1.2 + 1.3 replay by C1's training windows:
 | valid (light contamination) | 16 | +4.56% | +41% | 1.59 |
 | **holdout (CLEAN OOS)** | **16** | **−1.42%** | **−55%** | **0.86** |
 
-Training contributes **+87%** of total gross. The +271% headline was almost entirely "the model recognizes dates it was trained on." See [docs/PROJECT_PLAN.md §14](../../../docs/PROJECT_PLAN.md).
+Training contributes **+87%** of total gross. The +271% headline was almost entirely "the model recognizes dates it was trained on." See [docs/PROJECT_PLAN.md §14](../../../docs/archive/handovers_status/PROJECT_PLAN.md).
 
 ### 2.2 Exit timing doesn't rescue holdout
 
@@ -159,7 +159,7 @@ The unblocking action is **fresh data**, not more algorithm tweaks.
 ## 8. Open paths
 
 - **Forward shadow collection** — blocked on operator sharing Kite live credentials. Monday 2026-05-18 09:15 IST is the earliest start. Accumulates 1 trading day of fresh OOS per real day. 4-6 weeks builds the dataset needed for the next experiment.
-- **Next-experiment design** (do not run until fresh data exists) — three candidates documented in [PROJECT_PLAN.md §15](../../../docs/PROJECT_PLAN.md):
+- **Next-experiment design** (do not run until fresh data exists) — three candidates documented in [PROJECT_PLAN.md §15](../../../docs/archive/handovers_status/PROJECT_PLAN.md):
   1. Direct option-P&L label (binary: "did this option trade clear 200 bps?")
   2. Longer prediction horizon (max_hold 60-120 bars at training time)
   3. Different feature philosophy (structural rather than intraday momentum)

@@ -143,4 +143,4 @@ Get-Content .run/strategy_app/signals.jsonl -Tail 5
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [runbooks/README.md](runbooks/README.md)
 - [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
-- [DOCS_CODE_MAP.md](DOCS_CODE_MAP.md)
+- [DOCS_CODE_MAP.md](archive/ops_historical/DOCS_CODE_MAP.md) (archived)

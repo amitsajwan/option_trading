@@ -46,7 +46,7 @@ The ML pipeline (`ml_pipeline_2`) trains offline (locally or on a training VM) a
 | Live PF (VOLATILE only) | `1.31` |
 | Active runtime gate | `regime_gate_v1` (blocks `SIDEWAYS` and `AVOID` sessions) |
 
-**Pending research:** E2 (`staged_dual_recipe.deep_hpo_e2_volatile_only.json`) — VOLATILE+SIDEWAYS regime-filtered S2 retraining; runs once GCP is rebuilt. See [`docs/runbooks/RECOVERY_RUNBOOK.md`](docs/runbooks/RECOVERY_RUNBOOK.md) and [`ml_pipeline_2/docs/training/INDEX.md`](ml_pipeline_2/docs/training/INDEX.md).
+**Pending research:** E2 (`staged_dual_recipe.deep_hpo_e2_volatile_only.json`) — VOLATILE+SIDEWAYS regime-filtered S2 retraining; runs once GCP is rebuilt. See [`docs/archive/ops_historical/RECOVERY_RUNBOOK.md`](docs/archive/ops_historical/RECOVERY_RUNBOOK.md) (archived, Kite-era) and [`ml_pipeline_2/docs/training/INDEX.md`](ml_pipeline_2/docs/training/INDEX.md).
 
 ---
 
@@ -135,7 +135,7 @@ Choose:
 - `2` → Start or restart runtime (normal deploy)
 - `3` → Historical replay (never use for live deploys)
 
-See [`docs/runbooks/GCP_DEPLOYMENT.md`](docs/runbooks/GCP_DEPLOYMENT.md) for the full runbook and [`docs/runbooks/RECOVERY_RUNBOOK.md`](docs/runbooks/RECOVERY_RUNBOOK.md) for the post-GCP-loss recovery sequence.
+See [`docs/runbooks/GCP_DEPLOYMENT.md`](docs/runbooks/GCP_DEPLOYMENT.md) for the full runbook and [`docs/archive/ops_historical/RECOVERY_RUNBOOK.md`](docs/archive/ops_historical/RECOVERY_RUNBOOK.md) (archived, Kite-era) for the post-GCP-loss recovery sequence.
 
 ### 5. Verify After Deploy
 
@@ -254,7 +254,7 @@ python -m strategy_app.main --engine ml_pure \
 | Doc | What it covers |
 |---|---|
 | [`docs/runbooks/README.md`](docs/runbooks/README.md) | Runbook index |
-| [`docs/runbooks/RECOVERY_RUNBOOK.md`](docs/runbooks/RECOVERY_RUNBOOK.md) | **Post-GCP-loss recovery** — local training, new GCP rebuild, offline replay |
+| [`docs/archive/ops_historical/RECOVERY_RUNBOOK.md`](docs/archive/ops_historical/RECOVERY_RUNBOOK.md) (archived, Kite-era) | **Post-GCP-loss recovery** — local training, new GCP rebuild, offline replay |
 | [`docs/runbooks/LIVE_SETUP_GUIDE.md`](docs/runbooks/LIVE_SETUP_GUIDE.md) | Live runtime bring-up checklist |
 | [`docs/runbooks/GCP_DEPLOYMENT.md`](docs/runbooks/GCP_DEPLOYMENT.md) | Live deploy and historical replay on GCP |
 | [`docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) | Building parquet datasets for training |

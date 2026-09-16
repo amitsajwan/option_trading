@@ -6,13 +6,13 @@
 > means, and how the runtime consumes it.
 
 For where these fields surface in JSONL files, see [`OBSERVABILITY_GUIDE.md`](OBSERVABILITY_GUIDE.md).
-For the gate chain that wraps the model, see [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md).
+For the gate chain that wraps the model, see [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path).
 
 ---
 
 ## The contract object: `StagedRuntimeDecision`
 
-Defined in [`strategy_app/engines/pure_ml_staged_runtime.py:39-63`](../strategy_app/engines/pure_ml_staged_runtime.py).
+Defined in [`strategy_app/ml/pure_ml_staged_runtime.py:40-63`](../strategy_app/ml/pure_ml_staged_runtime.py).
 This is what BOTH the legacy 3-stage path (`predict_staged`) AND the
 multi-bundle path (`select_best_bundle_decision`) return for every
 snapshot the engine evaluates.
@@ -106,7 +106,7 @@ weren't degraded.
 
 [`PureMLEngine.evaluate`](../strategy_app/engines/pure_ml_engine.py) treats the
 returned `StagedRuntimeDecision` as input for a series of subsequent
-gates (see [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md) gates 7-11).
+gates (see [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path) gates 7-11).
 
 The chain that consumes the decision:
 

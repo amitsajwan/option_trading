@@ -4,7 +4,7 @@ Frontend + backend dashboard service for status monitoring, charts, and Redis-to
 
 For quick run commands by scenario, see `../README.md`.
 For startup and run instructions, see [../docs/PROCESS_TOPOLOGY.md](../docs/PROCESS_TOPOLOGY.md).
-For architecture and code mapping, see [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) and [../docs/DOCS_CODE_MAP.md](../docs/DOCS_CODE_MAP.md).
+For architecture and code mapping, see [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) and [../docs/archive/ops_historical/DOCS_CODE_MAP.md](../docs/archive/ops_historical/DOCS_CODE_MAP.md) (archived).
 For stream topology and timestamp lineage, see [../docs/PROCESS_TOPOLOGY.md](../docs/PROCESS_TOPOLOGY.md).
 
 ## What this service does

@@ -78,11 +78,17 @@ POSITION MANAGEMENT (exits checked every bar, ADAPTIVE routing by Regime enum):
 **Config file (only one):** `/opt/option_trading/.env.compose`  
 **Old `algo-trading-496203` and `amittrading-493606` projects are DEAD — never reference them.**
 
-> **Being consolidated** → all strategy tunables below are moving into a single
-> grouped YAML (`ops/strategy_config.yml`) read by both live and sim, so SIM can
-> no longer diverge from LIVE. Plan + phases:
-> [`docs/strategy_platform/CONFIG_CONSOLIDATION_PLAN.md`](strategy_platform/CONFIG_CONSOLIDATION_PLAN.md).
-> Until that lands, `.env.compose` remains the single live config file.
+> 2026-09-16: the paragraph below describes a consolidation into
+> `ops/strategy_config.yml` that was proposed and partially built (the file
+> and `ops/config_parity.py` both exist) but never actually shipped --
+> `config_parity.py`'s own docstring calls it prep work for a future "flip
+> to yaml_wins" that never happened. `ops/strategy_config.yml` was last
+> reconciled 2026-06-14 and has not been touched since; `.env.compose` has
+> changed extensively since then (multi-instrument rollout, seller pivot).
+> Treat `.env.compose` as the sole config source of truth, full stop -- do
+> not treat `ops/strategy_config.yml` as authoritative or in-sync. The plan
+> doc is archived at
+> [`docs/archive/strategy_platform_old/CONFIG_CONSOLIDATION_PLAN.md`](archive/strategy_platform_old/CONFIG_CONSOLIDATION_PLAN.md).
 
 ```bash
 # Execution
@@ -141,10 +147,12 @@ RISK_CAPITAL_ALLOCATED=41000        # live Dhan balance (sizing base)
 RISK_PER_TRADE_PCT=0.005
 ```
 
-> **Authoritative source for these values is now `ops/strategy_config.yml`**
-> (parity-verified against `.env.compose`). This block is a human-readable mirror;
-> if it ever disagrees, the YAML + `python ops/config_parity.py` win. The exact
-> per-bar gate order is in [`strategy_platform/REAL_ALGO_STEPWISE.md`](strategy_platform/REAL_ALGO_STEPWISE.md).
+> 2026-09-16: same correction as above -- `ops/strategy_config.yml` is NOT
+> authoritative, it's a stale one-time snapshot from 2026-06-14. `.env.compose`
+> wins, always. The exact per-bar gate order this block used to point to is
+> archived at
+> [`strategy_platform/REAL_ALGO_STEPWISE.md`](archive/strategy_platform_old/REAL_ALGO_STEPWISE.md)
+> (historical; verify current gate order against `strategy_app/engines/` directly).
 > The PROPOSED redesign (opportunity gate = selection, direction = straddle-default)
 > is separate and NOT live — see `OPPORTUNITY_GATE_DESIGN.md`,
 > `GATE_FORENSICS_AND_CONFIG.md`, `DIRECTION_TREE_FINDINGS.md`.

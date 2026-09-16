@@ -6,7 +6,7 @@
 > specific file or grep pattern. If something doesn't appear here, it
 > isn't currently observable — flag it as an observability gap to fix.
 
-For the gate chain semantics, see [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md).
+For the gate chain semantics, see [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path).
 For what the model emits, see [`MODEL_OUTPUT_CONTRACT.md`](MODEL_OUTPUT_CONTRACT.md).
 For backups, restores, and the cleanup protocol, see [`runbooks/CLEANUP_ROLLBACK_RUNBOOK.md`](runbooks/CLEANUP_ROLLBACK_RUNBOOK.md).
 
@@ -80,7 +80,7 @@ grep '"snapshot_id":"YYYYMMDD_HHMM"' .run/strategy_app_historical/signals.jsonl 
   | jq '.reason'
 ```
 
-The `reason` is one of (sorted by gate order — see [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md)):
+The `reason` is one of (sorted by gate order — see [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path)):
 
 | Reason | Meaning |
 |---|---|

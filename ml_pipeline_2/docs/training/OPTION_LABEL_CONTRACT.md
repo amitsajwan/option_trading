@@ -2,7 +2,7 @@
 
 **Status:** v1.0.0 — drafted 2026-05-17, blocking gate before Step 2 (labeler).
 **Config:** [`ml_pipeline_2/configs/research/option_label_contract.json`](../../configs/research/option_label_contract.json)
-**Related:** [PROJECT_PLAN.md §15](../../../docs/PROJECT_PLAN.md) candidate #1; [JIRA_STAGED_RECIPE_RISK_BASIS_FIX.md](../JIRA_STAGED_RECIPE_RISK_BASIS_FIX.md).
+**Related:** [PROJECT_PLAN.md §15](../../../docs/archive/handovers_status/PROJECT_PLAN.md) candidate #1; [JIRA_STAGED_RECIPE_RISK_BASIS_FIX.md](../JIRA_STAGED_RECIPE_RISK_BASIS_FIX.md).
 
 ---
 
@@ -37,8 +37,8 @@ The only fresh lookup the labeler performs that the runtime doesn't is the **fut
 
 | # | Clause | Labeler reads | Runtime reads | Divergence failure |
 |---|--------|---------------|---------------|---------------------|
-| 1 | ATM strike | `snapshot.atm_strike` (no recompute) | `snap.atm_strike` ([option_selector.py:70](../../../strategy_app/engines/option_selector.py#L70)) | Different contract entirely → model is useless |
-| 2 | Strike step (for OTM/ITM recipes) | `snapshot.strike_step()` | `snap.strike_step()` ([option_selector.py:120-122](../../../strategy_app/engines/option_selector.py#L120-L122)) | Wrong neighboring strike → wrong delta + IV |
+| 1 | ATM strike | `snapshot.atm_strike` (no recompute) | `snap.atm_strike` ([option_selector.py:70](../../../strategy_app/signals/option_selector.py#L70)) | Different contract entirely → model is useless |
+| 2 | Strike step (for OTM/ITM recipes) | `snapshot.strike_step()` | `snap.strike_step()` ([option_selector.py:120-122](../../../strategy_app/signals/option_selector.py#L120-L122)) | Wrong neighboring strike → wrong delta + IV |
 | 3 | Expiry | `snapshot.expiry` (chain's published expiry) | Same — chain's expiry is what the runtime trades | Trading next-week's contract while label refers to this-week's |
 | 4 | Entry premium | `options.close at (t₀, strike, expiry, side)` | Live broker fill at t₀ close in production; simulated close in replay | Label uses bar close but runtime fills next-bar open → ~1 bar of futures move worth of error |
 | 5 | Exit premium (max hold) | `options.close at (t₀+N, same strike, same expiry, same side)` | Same — runtime closes at `entryIdx + max_hold_bars` close | Exit timing drift |

@@ -46,7 +46,7 @@ Frontend type-check: `cd strategy_eval_ui && npx tsc -b --noEmit`
 
 ### GCP deploy (single VM preferred)
 
-**Target:** one VM for **runtime + ML** — see [docs/GCP_UNIFIED_VM.md](docs/GCP_UNIFIED_VM.md).
+**Target:** one VM for **runtime + ML** — see [docs/archive/ops_historical/GCP_UNIFIED_VM.md](docs/archive/ops_historical/GCP_UNIFIED_VM.md) (archived).
 
 | Item | Value |
 |------|--------|

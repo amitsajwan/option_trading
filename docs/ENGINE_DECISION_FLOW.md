@@ -45,7 +45,7 @@ startup log (`docker logs <strategy_app> | grep "starting engine"`):
 | `ML_ENTRY_DIRECTION_MODE` (env) | **`multi_signal`** | how the direction is chosen (§5) — stateless 5-signal scorer; abstains when weak |
 
 > ⚠️ **`PureMLEngine`** ([`pure_ml_engine.py`](../strategy_app/engines/pure_ml_engine.py)),
-> documented in [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md), is **NOT live.**
+> documented in [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path), is **NOT live.**
 > Reading that doc to understand live behavior sends you down the wrong path.
 
 ---
@@ -187,7 +187,7 @@ GET  /api/ops/sim/<job_id>   → read summary.trade_count / win_count
 | Doc | Trust for |
 |---|---|
 | **THIS doc** | ✅ the live engine decision flow (authoritative) |
-| [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md) | ⚠️ `PureMLEngine` only — **not live** |
+| [`RUNTIME_DECISION_FLOW.md`](archive/flow_superseded/RUNTIME_DECISION_FLOW.md) (archived -- documents the non-live PureMLEngine path) | ⚠️ `PureMLEngine` only — **not live** |
 | `SIGNAL_TO_TRADE_FLOW.md`, `ENTRY_AND_DIRECTION.md`, `SYSTEM_FLOW_DIAGRAMS.md` | ⚠️ older/partial — defer to this doc on any conflict |
 | `DIRECTION_PANEL_V1_SPEC.md` | the *plan* for direction work — but its lever code must target §7's live path |
 

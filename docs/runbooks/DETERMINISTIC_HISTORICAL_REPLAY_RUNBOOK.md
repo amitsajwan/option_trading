@@ -76,7 +76,7 @@ MARKET_SESSION_ENABLED=0
 HISTORICAL_TOPIC=market:snapshot:v1:historical
 ```
 
-For the audit-backed R1S top-3 setup, see [R1S_REPLAY_EVAL_INTEGRATION.md](../R1S_REPLAY_EVAL_INTEGRATION.md).
+For the audit-backed R1S top-3 setup, see [R1S_REPLAY_EVAL_INTEGRATION.md](../archive/r1s/R1S_REPLAY_EVAL_INTEGRATION.md) (archived).
 
 Historical replay also needs this parquet base:
 

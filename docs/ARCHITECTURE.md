@@ -183,6 +183,6 @@ Two replay modes are conceptually distinct and should be invoked with different 
 - [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
 - [PROCESS_TOPOLOGY.md](PROCESS_TOPOLOGY.md)
 - [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md)
-- [DOCS_CODE_MAP.md](DOCS_CODE_MAP.md)
+- [DOCS_CODE_MAP.md](archive/ops_historical/DOCS_CODE_MAP.md) (archived)
 - [../strategy_app/docs/README.md](../strategy_app/docs/README.md)
 - [../ml_pipeline_2/docs/README.md](../ml_pipeline_2/docs/README.md)
