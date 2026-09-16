@@ -14,12 +14,20 @@ parse respectively, out of scope here). A link with a `#fragment` has the
 fragment stripped before the file-existence check; fragment correctness is
 not verified.
 
-Exit code 0 = every relative link resolves. Exit code 1 = at least one
-doesn't (printed as `file:line: [text](target) -> target does not exist`).
+`docs/archive/**` is excluded by default. Archived docs are frozen
+historical snapshots that intentionally cross-reference other archived docs
+and long-deleted code from defunct branches -- that's expected, not a
+regression, and fixing it would mean either resurrecting dead paths or
+pointless archaeology. Pass --include-archive to see those too.
+
+Exit code 0 = every relative link resolves (within scope). Exit code 1 =
+at least one doesn't (printed as
+`file:line: [text](target) -> target does not exist`).
 
 Usage:
-    python3 ops/check_doc_links.py                  # scan the whole repo
+    python3 ops/check_doc_links.py                  # scan the whole repo, skip docs/archive/
     python3 ops/check_doc_links.py docs/ strategy_app/docs/   # scan specific dirs
+    python3 ops/check_doc_links.py --include-archive # also check docs/archive/
 """
 from __future__ import annotations
 
@@ -85,6 +93,9 @@ def main(argv: list[str]) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
+    include_archive = "--include-archive" in argv
+    argv = [a for a in argv if a != "--include-archive"]
+
     if argv:
         files = []
         for arg in argv:
@@ -97,13 +108,18 @@ def main(argv: list[str]) -> int:
     else:
         files = _tracked_markdown_files()
 
+    if not include_archive:
+        archive_root = (REPO_ROOT / "docs" / "archive").resolve()
+        files = [f for f in files if archive_root not in f.resolve().parents]
+
     all_ok: list[bool] = []
     all_problems: list[str] = []
     for f in files:
         all_problems.extend(check_file(f, all_ok))
 
     if not all_problems:
-        print(f"[check_doc_links] OK -- scanned {len(files)} markdown files, all relative links resolve.")
+        scope = "" if include_archive else " (docs/archive/ excluded)"
+        print(f"[check_doc_links] OK -- scanned {len(files)} markdown files{scope}, all relative links resolve.")
         return 0
 
     print(f"[check_doc_links] {len(all_problems)} broken link(s) across {len(files)} scanned files:\n")

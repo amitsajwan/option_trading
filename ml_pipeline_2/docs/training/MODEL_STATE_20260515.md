@@ -116,8 +116,8 @@ For real OOS validation we need data the model never trained on (2025+). Explore
 
 ## 3. Code / infra changes today
 
-- [strategy_app/engines/trade_signal_builder.py](../../../strategy_app/engines/trade_signal_builder.py) — inverted precedence so env overrides (`underlying_stop_pct`, `underlying_target_pct`, `max_hold_bars`) win over recipe defaults. Previously the staged recipe's values silently masked operator config. 5 new unit tests in [test_trade_signal_builder.py](../../../strategy_app/tests/test_trade_signal_builder.py).
-- [strategy_app/engines/option_selector.py](../../../strategy_app/engines/option_selector.py) — new module; smart-strike selector (ATM, 1-OTM, reject) gated by `STRATEGY_SMART_STRIKE_ENABLED`. 11 unit tests. **Note:** OTM branch never fired on C1's trade set (confidence below 0.75 threshold); only the IV-reject filter activated.
+- [strategy_app/signals/trade_signal_builder.py](../../../strategy_app/signals/trade_signal_builder.py) (moved from `engines/` since this was written) — inverted precedence so env overrides (`underlying_stop_pct`, `underlying_target_pct`, `max_hold_bars`) win over recipe defaults. Previously the staged recipe's values silently masked operator config. 5 new unit tests in [test_trade_signal_builder.py](../../../strategy_app/tests/test_trade_signal_builder.py).
+- [strategy_app/signals/option_selector.py](../../../strategy_app/signals/option_selector.py) (moved from `engines/` since this was written) — new module; smart-strike selector (ATM, 1-OTM, reject) gated by `STRATEGY_SMART_STRIKE_ENABLED`. 11 unit tests. **Note:** OTM branch never fired on C1's trade set (confidence below 0.75 threshold); only the IV-reject filter activated.
 - [strategy_app/engines/pure_ml_engine.py](../../../strategy_app/engines/pure_ml_engine.py) — wired selector + plumbed `max_hold_bars_override`.
 - [docker-compose.yml](../../../docker-compose.yml) — `strategy_persistence_app_historical` `--trace-topic` wiring (was silently hanging without it).
 - [market_data_dashboard/static/webapp/terminal-live.jsx](../../../market_data_dashboard/static/webapp/terminal-live.jsx) — date-picker now tags each date `● train / ◐ valid / ○ OOS / post`. Prevents re-celebrating in-sample numbers. Deployed v8.
@@ -168,6 +168,6 @@ The unblocking action is **fresh data**, not more algorithm tweaks.
 
 For anyone reading the code:
 
-- Cost-in-label application: [`staged/pipeline.py` lines 295-296](../../src/ml_pipeline_2/staged/pipeline.py#L295) — `ce_net = path_return − cost_per_trade`
-- Stage 1 CV gate eval: [`staged/pipeline.py`](../../src/ml_pipeline_2/staged/pipeline.py) — search for `stage1_cv_gate` or `block_rate`
+- Cost-in-label application: `staged/pipeline.py` lines 295-296 (`ce_net = path_return − cost_per_trade`) — 2026-09-16: this file no longer exists; the staged module was refactored into `recipes.py`/`registries.py`/`scenario_runner.py`/`results_analyzer.py`/`runtime_contract.py`/`config_diff.py` under `ml_pipeline_2/src/ml_pipeline_2/staged/`, exact new location not tracked down.
+- Stage 1 CV gate eval: same file, search for `stage1_cv_gate` or `block_rate` — same 2026-09-16 note applies
 - Direction label: `direction_market_up_v1` — labeler picks side with higher `best_*_net_return_after_cost`
