@@ -5,10 +5,35 @@ from typing import Optional
 
 import pandas as pd
 
-from ml_pipeline_2.scripts.option_pnl_smoke import pick_expiry_for_date
-
 DEFAULT_FLAT_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v3")
 DEFAULT_OPTIONS_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/options")
+
+
+def pick_expiry_for_date(options_df: pd.DataFrame, trade_date: pd.Timestamp) -> Optional[str]:
+    """Among the expiries present for this trade_date, pick the nearest one
+    that is >= trade_date (the current weekly).
+
+    Falls back to first available if all expiries are in the past (shouldn't
+    happen for real data — bail with None and the caller can investigate).
+
+    2026-09-16: ported in-place from the now-deleted option_pnl_smoke.py
+    (this was its only consumer left in the repo) rather than resurrecting
+    that whole module for one function.
+    """
+    by_expiry: list[tuple[pd.Timestamp, str]] = []
+    for exp_str in options_df["expiry_str"].dropna().unique():
+        try:
+            exp_dt = pd.to_datetime(exp_str, format="%d%b%y")
+        except ValueError:
+            continue
+        by_expiry.append((exp_dt, exp_str))
+    if not by_expiry:
+        return None
+    forward = [(d, s) for d, s in by_expiry if d >= trade_date]
+    if forward:
+        return min(forward)[1]
+    # All in past — return latest past (defensive).
+    return max(by_expiry)[1]
 
 
 def _assert_unique_keys(df: pd.DataFrame, label: str) -> None:

@@ -15,7 +15,10 @@ an optional layer:
     DIRECTION_ML_FILTER_MIN_PROB (0–1). Below that, entry is blocked.
     Useful once the model has proven itself in live shadow mode first.
 
-Load the model bundle (from train_direction_only.py or export_direction_bundle_from_research.py):
+Load the model bundle (from train_direction_dhan_v3.py, the current trainer;
+2026-09-16: the older train_direction_only.py/export_direction_bundle_from_
+research.py this comment used to cite were removed as dead -- production
+DIRECTION_ML_MODEL_PATH now resolves to direction_dhan_bn_v3.joblib):
     export DIRECTION_ML_MODEL_PATH=/path/to/direction_only_model.joblib
 
 Then the DeterministicRuleEngine will automatically wrap the active policy
