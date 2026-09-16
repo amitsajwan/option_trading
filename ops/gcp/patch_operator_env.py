@@ -3,13 +3,20 @@
 patch_operator_env.py
 
 Replaces placeholder values in ops/gcp/operator.env with real project values
-for the amittrading-493606 GCP project.
+for the trader-502012 GCP project.
 
 Run once after cloning on a new machine or after VM rebuild:
 
     python3 ops/gcp/patch_operator_env.py [--repo-root /path/to/repo]
 
 Safe to re-run — only replaces known placeholder strings, leaves other values untouched.
+
+2026-09-16: this script was originally written for amittrading-493606, one
+migration behind the (also now dead) algo-trading-496203, itself now
+superseded by trader-502012. If you're reading this after a THIRD project
+migration, update REPLACEMENTS below rather than trust it blindly -- this
+exact staleness is what caused ops/gcp/operator.env itself to sit wrong for
+months (see project_invariant_checkers_2026-09-16 in memory).
 """
 from __future__ import annotations
 import argparse
@@ -19,19 +26,19 @@ import sys
 
 REPLACEMENTS = [
     # GCP project
-    ('my-gcp-project',              'amittrading-493606'),
+    ('my-gcp-project',              'trader-502012'),
     # Zone (terraform.tfvars uses asia-south1-b, not -a)
     ('ZONE="asia-south1-a"',        'ZONE="asia-south1-b"'),
     # Repo
     ('your-github-org',             'amitsajwan'),
     # Runtime VM name
-    ('RUNTIME_NAME="option-trading-runtime"', 'RUNTIME_NAME="option-trading-runtime-01"'),
+    ('RUNTIME_NAME="option-trading-runtime"', 'RUNTIME_NAME="trader-runtime-01"'),
     # Buckets
-    ('my-option-trading-models',              'amittrading-493606-option-trading-models'),
-    ('my-option-trading-runtime-config',      'amittrading-493606-option-trading-runtime-config'),
+    ('my-option-trading-models',              'trader-502012-option-trading-models'),
+    ('my-option-trading-runtime-config',      'trader-502012-option-trading-runtime-config'),
     # Data sync
     ('my-training-data-root/ml_pipeline',
-     'amittrading-493606-option-trading-snapshots/ml_pipeline'),
+     'trader-502012-option-trading-snapshots/ml_pipeline'),
 ]
 
 

@@ -42,7 +42,7 @@ detect_remote_compose_cmd() {
 
 require_command gcloud
 
-TARGET_VM_NAME="${TARGET_VM_NAME:-${RUNTIME_NAME:-option-trading-runtime-01}}"
+TARGET_VM_NAME="${TARGET_VM_NAME:-${RUNTIME_NAME:-trader-runtime-01}}"
 TARGET_REPO_ROOT="${TARGET_REPO_ROOT:-$(detect_remote_repo_root)}"
 TARGET_REPO_ROOT="${TARGET_REPO_ROOT:-/opt/option_trading}"
 REMOTE_COMPOSE_CMD="${REMOTE_COMPOSE_CMD:-$(detect_remote_compose_cmd)}"

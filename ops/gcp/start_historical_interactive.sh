@@ -290,7 +290,7 @@ echo
 default_project="${PROJECT_ID:-$(detect_default_project)}"
 default_project="${default_project:-my-gcp-project}"
 default_snapshot_bucket="${SNAPSHOT_PARQUET_BUCKET_URL:-}"
-default_vm_name="${RUNTIME_NAME:-option-trading-runtime-01}"
+default_vm_name="${RUNTIME_NAME:-trader-runtime-01}"
 default_image_source="${IMAGE_SOURCE:-ghcr}"
 default_app_image_tag="${APP_IMAGE_TAG:-${TAG:-latest}}"
 default_zone="${ZONE:-$(detect_default_zone)}"

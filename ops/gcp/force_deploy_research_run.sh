@@ -24,12 +24,12 @@
 #   MODEL_GROUP=banknifty_futures/h15_tp_auto \
 #   PROFILE_ID=openfe_v9_dual \
 #   APP_IMAGE_TAG=latest \
-#   MODEL_BUCKET_URL=gs://amittrading-493606-option-trading-models/published_models \
-#   RUNTIME_CONFIG_BUCKET_URL=gs://amittrading-493606-option-trading-runtime-config/runtime \
+#   MODEL_BUCKET_URL=gs://trader-502012-option-trading-models/published_models \
+#   RUNTIME_CONFIG_BUCKET_URL=gs://trader-502012-option-trading-runtime-config/runtime \
 #   bash ./ops/gcp/force_deploy_research_run.sh
 #
 # All env vars can also be set in ops/gcp/operator.env.
-# MODEL_BUCKET_URL and RUNTIME_CONFIG_BUCKET_URL default to amittrading-493606 project values.
+# MODEL_BUCKET_URL and RUNTIME_CONFIG_BUCKET_URL default to trader-502012 project values.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,8 +68,8 @@ MODEL_GROUP="${MODEL_GROUP:-banknifty_futures/h15_tp_auto}"
 PROFILE_ID="${PROFILE_ID:-openfe_v9_dual}"
 APP_IMAGE_TAG="${APP_IMAGE_TAG:-latest}"
 RUNTIME_GUARD_PATH="${RUNTIME_GUARD_PATH:-.run/ml_runtime_guard_live.json}"
-MODEL_BUCKET_URL="${MODEL_BUCKET_URL:-gs://amittrading-493606-option-trading-models/published_models}"
-RUNTIME_CONFIG_BUCKET_URL="${RUNTIME_CONFIG_BUCKET_URL:-gs://amittrading-493606-option-trading-runtime-config/runtime}"
+MODEL_BUCKET_URL="${MODEL_BUCKET_URL:-gs://trader-502012-option-trading-models/published_models}"
+RUNTIME_CONFIG_BUCKET_URL="${RUNTIME_CONFIG_BUCKET_URL:-gs://trader-502012-option-trading-runtime-config/runtime}"
 
 if [ ! -d "${RUN_DIR}" ]; then
   echo "ERROR: RUN_DIR not found: ${RUN_DIR}" >&2

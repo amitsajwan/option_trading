@@ -13,14 +13,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKUP_ROOT="${BACKUP_ROOT:-${REPO_ROOT}}"   # override to write elsewhere, e.g. an external drive
 
-PROJECT="amittrading-493606"
+PROJECT="trader-502012"
 ZONE="asia-south1-b"
-TRAINING_VM="option-trading-ml-01"
+TRAINING_VM="trader-training-01"
 TRAINING_VM_USER="savitasajwan03"
 
-SNAPSHOT_BUCKET="gs://amittrading-493606-option-trading-snapshots"
-MODEL_BUCKET="gs://amittrading-493606-option-trading-models"
-RUNTIME_CONFIG_BUCKET="gs://amittrading-493606-option-trading-runtime-config"
+SNAPSHOT_BUCKET="gs://trader-502012-option-trading-snapshots"
+MODEL_BUCKET="gs://trader-502012-option-trading-models"
+RUNTIME_CONFIG_BUCKET="gs://trader-502012-option-trading-runtime-config"
 
 PARQUET_GCS="${SNAPSHOT_BUCKET}/ml_pipeline/parquet_data"
 LOCAL_PARQUET="${BACKUP_ROOT}/.data/ml_pipeline/parquet_data"

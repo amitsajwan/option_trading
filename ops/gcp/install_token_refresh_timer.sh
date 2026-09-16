@@ -5,8 +5,8 @@
 # token every morning at 08:30 IST (03:00 UTC) before market opens at 09:15 IST.
 #
 # Run this ONCE on the VM after first deploy:
-#   gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-#     --project=amit-trading \
+#   gcloud compute ssh trader-runtime-01 --zone=asia-south1-b \
+#     --project=trader-502012 \
 #     --command "cd /opt/option_trading && sudo bash ops/gcp/install_token_refresh_timer.sh"
 #
 # Prerequisites:

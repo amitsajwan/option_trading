@@ -21,7 +21,10 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NEW_PROJECT="${NEW_PROJECT:-}"
-OLD_PROJECT="amittrading-493606"
+# Must always match whatever project ID is currently live in operator.env --
+# update this alongside operator.env's PROJECT_ID on every future migration
+# (2026-09-16: this was still amittrading-493606, two migrations stale).
+OLD_PROJECT="trader-502012"
 SKIP_DATA_UPLOAD="${SKIP_DATA_UPLOAD:-0}"
 SKIP_TERRAFORM="${SKIP_TERRAFORM:-0}"
 SKIP_TRAINING_VM="${SKIP_TRAINING_VM:-0}"

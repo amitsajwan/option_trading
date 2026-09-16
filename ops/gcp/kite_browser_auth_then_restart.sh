@@ -2,8 +2,8 @@
 # Browser Kite login on the runtime VM (use with SSH port-forward to localhost:5000).
 #
 # On your laptop (PowerShell), in one terminal:
-#   gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b `
-#     --project=amit-trading -- -L 5000:127.0.0.1:5000
+#   gcloud compute ssh trader-runtime-01 --zone=asia-south1-b `
+#     --project=trader-502012 -- -L 5000:127.0.0.1:5000
 #
 # In that SSH session on the VM:
 #   sudo bash /opt/option_trading/ops/gcp/kite_browser_auth_then_restart.sh
