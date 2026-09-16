@@ -1,6 +1,22 @@
-# BankNifty Architecture
+# Architecture
+
+> ## ⚠️ KNOWN STALE — engine-lane claims are backwards (flagged 2026-09-16)
+> This doc states `ml_pure` is "the supported live lane" / "Production
+> trading lane" and that deterministic is only for replay/research (§1,
+> the table in §_ near "two orthogonal axes", and elsewhere). **That is
+> currently backwards.** The real `.env.compose` has
+> `STRATEGY_ENGINE=deterministic` (compose files default to `deterministic`
+> too) — `deterministic` is what's actually running across all 5 live-paper
+> instruments today; `ml_pure` is disabled-but-intact (kept alive for its
+> supporting `ml_pipeline_2` training infrastructure, not currently serving
+> live decisions). The component boundaries, contracts, and topic names
+> below are still accurate — only the "which engine is live" framing is
+> wrong. Not fully rewritten this pass; treat every ml_pure-is-live
+> statement below as unverified against current reality.
 
 This document is the current cross-cutting system view. Package-specific details live under the owning package docs.
+The title used to be "BankNifty Architecture" — the content was never
+BankNifty-specific, that was a leftover from before the 5-instrument rollout.
 
 ## 1. Component Boundaries
 
