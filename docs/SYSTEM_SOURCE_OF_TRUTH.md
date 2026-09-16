@@ -351,11 +351,17 @@ Safe override keys are defined in `market_data_dashboard/routes/ops_routes.py:_S
 
 ## 9. Reference Docs
 
+2026-09-16: all 5 of these had already been archived (4 of them, in earlier
+cleanup passes this repo doesn't otherwise document) — this table pointed to
+dead paths. Updated to the current archive locations; none of these are
+current operating instructions, only historical evidence/decision records.
+
 | Doc | What it answers |
 |---|---|
-| `docs/FINDINGS_2026-06-14.md` | Full evidence base — all verdicts with data |
-| `docs/TWO_REGIME_SYSTEMS.md` | Regime enum vs RegimeDirector quality (naming confusion) |
-| `docs/CONFIG_SAFE_OPS.md` | How to change code/config safely without losing fixes |
-| `docs/RUNTIME_STATE_AND_RECOVERY.md` | VM rebuild + config snapshot |
-| `docs/strategy_platform/05_CONFIG_REFERENCE.md` | Every env var with default and meaning |
-| `docs/FINDINGS_2026-06-14.md` | Full evidence base — all verdicts with data |
+| `docs/archive/handovers_status/FINDINGS_2026-06-14.md` | Full evidence base — all verdicts with data (historical, pre-Dhan) |
+| `docs/archive/strategy_design/TWO_REGIME_SYSTEMS.md` | Regime enum vs RegimeDirector quality (naming confusion) |
+| `docs/archive/ops_historical/CONFIG_SAFE_OPS.md` | How to change code/config safely without losing fixes |
+| `docs/archive/ops_historical/RUNTIME_STATE_AND_RECOVERY.md` | 2026-06-10 VM-loss recovery record — the VM it describes (`option-trading-runtime-01`, project `amit-trading`) is 2 migrations behind current (`trader-runtime-01`, `trader-502012`) |
+| `docs/archive/strategy_platform_old/05_CONFIG_REFERENCE.md` | Every env var with default and meaning (superseded by `docs/strategy_platform/CONFIG.md`) |
+
+For current config reference, use [strategy_platform/CONFIG.md](strategy_platform/CONFIG.md), not the archived docs above.

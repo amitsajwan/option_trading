@@ -25,13 +25,13 @@ analysis, not deleted).
 |---|---|
 | [strategy_platform/DIRECTION_STRATEGY_SYNTHESIS.md](strategy_platform/DIRECTION_STRATEGY_SYNTHESIS.md) | Direction: proofs + the regime-conditioned council (the wall) |
 | [strategy_platform/OPPORTUNITY_GATE_DESIGN.md](strategy_platform/OPPORTUNITY_GATE_DESIGN.md) | Selection Gate 1 (rank-relative-to-today + cost floor) |
+| [strategy_platform/EXIT_SYSTEM.md](strategy_platform/EXIT_SYSTEM.md) | The exit policy stack (`EXIT_STRATEGY_MODE`) |
 
 ## Config & operate
 | Doc | What |
 |---|---|
 | [strategy_platform/CONFIG.md](strategy_platform/CONFIG.md) | **Config — one source** (`.env.compose`), profiles, deploy |
-| [GO_LIVE_CHECKLIST.md](GO_LIVE_CHECKLIST.md) | Go-real checklist |
-| [RUNTIME_STATE_AND_RECOVERY.md](RUNTIME_STATE_AND_RECOVERY.md) | Runtime state + recovery |
+| [GO_LIVE_CHECKLIST.md](GO_LIVE_CHECKLIST.md) | Go-real checklist (see its own known-stale banner) |
 | [OBSERVABILITY_GUIDE.md](OBSERVABILITY_GUIDE.md) | Logs / metrics / what to watch |
 | [runbooks/](runbooks/) | Step-by-step ops (deploy, live cutover, sim replay, recovery, training release) |
 | [TEAM_ONBOARDING.md](TEAM_ONBOARDING.md) | New-joiner onboarding |
