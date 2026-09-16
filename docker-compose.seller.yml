@@ -23,13 +23,25 @@ services:
       MONGO_PORT: "27017"
       MONGO_DB: trading_ai
       STRATEGY_RUN_DIR: /seller_run
-      EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      # 2026-09-16: namespaced (was the bare global var, the exact anti-pattern
+      # already fixed for EXIT_STRATEGY_MODE elsewhere -- BankNifty and NIFTY's
+      # seller blocks were the only two still reading unnamespaced
+      # EXECUTION_ADAPTER/SELLER_LIVE_ENABLED, while FINNIFTY/SENSEX/MIDCPNIFTY
+      # were already safely namespaced with a paper/0 default). Found while
+      # auditing disaster-recovery safety: a bare .env.compose default of
+      # dhan/1 meant restarting this DEAD seller (SIGKILLed 2026-09-08, real-
+      # money decision left to the user, never resolved) would silently bring
+      # it back live. Now defaults to paper/0 like every other instrument --
+      # resuming real money requires an explicit BANKNIFTY_EXECUTION_ADAPTER/
+      # BANKNIFTY_SELLER_LIVE_ENABLED override, a deliberate decision, not an
+      # ambient side effect of a shared var.
+      EXECUTION_ADAPTER: "${BANKNIFTY_EXECUTION_ADAPTER:-paper}"
       # Real-money credentials — required when EXECUTION_ADAPTER=dhan + SELLER_LIVE_ENABLED=1,
       # else DhanAdapter() raises at startup (safe-fail, but must be wired for real trading to work).
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
-      SELLER_LIVE_ENABLED: "${SELLER_LIVE_ENABLED:-0}"
+      SELLER_LIVE_ENABLED: "${BANKNIFTY_SELLER_LIVE_ENABLED:-0}"
       SELLER_CONDOR_OFFSET: "${SELLER_CONDOR_OFFSET:-200}"
       # BankNifty-specific floor (2026-08-22): 19-month backtest (Nov'24-May'26)
       # showed floor=15 vs floor=30 is P&L-flat (₹140,282 vs ₹141,058) and
@@ -83,11 +95,14 @@ services:
       MONGO_DB: trading_ai
       STRATEGY_INSTRUMENT: NIFTY
       STRATEGY_RUN_DIR: /seller_run
-      EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      # 2026-09-16: namespaced -- see BankNifty's block above for why (was the
+      # bare global var; this dead seller, SIGKILLed 2026-09-08, would have
+      # silently come back live on restart otherwise).
+      EXECUTION_ADAPTER: "${NIFTY_EXECUTION_ADAPTER:-paper}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
-      SELLER_LIVE_ENABLED: "${SELLER_LIVE_ENABLED:-0}"
+      SELLER_LIVE_ENABLED: "${NIFTY_SELLER_LIVE_ENABLED:-0}"
       NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-65}"
       SELLER_CONDOR_OFFSET: "${NIFTY_SELLER_CONDOR_OFFSET:-100}"
       SELLER_IV_RANK_MIN: "${SELLER_IV_RANK_MIN:-30}"
