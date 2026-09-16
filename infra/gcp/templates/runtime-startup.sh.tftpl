@@ -118,6 +118,13 @@ else
   fi
 fi
 
+# Safety-critical (2026-09-16): operator_halt files live under the gitignored
+# .run/ mount and are NOT part of a fresh checkout -- without this, a restored
+# strategy_app_* container starts live-eligible by default if .env.compose's
+# own values allow it. Must run before the FIRST `up`, every time, no
+# exceptions. See ops/gcp/ensure_safe_defaults.sh for the full rationale.
+"$${REPO_DIR}/ops/gcp/ensure_safe_defaults.sh"
+
 docker compose "$${COMPOSE_ARGS[@]}" up -d redis mongo ingestion_app snapshot_app persistence_app strategy_app strategy_persistence_app
 
 if [ "${enable_dashboard_profile}" = "true" ]; then
