@@ -1,5 +1,20 @@
 # strategy_app
 
+> ## ⚠️ KNOWN STALE — "ml_pure is live production" is backwards (flagged 2026-09-16)
+> This doc (and CURRENT_TREE_VALIDATION.md, detailed-design.md,
+> OPERATOR_PLAYBOOK.md, RELEASE_READINESS_CHECKLIST.md, STRATEGY_ML_FLOW.md
+> in this same directory) consistently describe `ml_pure` as the supported
+> live/production engine lane and `deterministic` as research/replay-only.
+> Verified against the real `.env.compose`: `STRATEGY_ENGINE=deterministic`
+> (the compose files' own default too) — `deterministic` is what's actually
+> running across all 5 live-paper instruments today (BankNifty, NIFTY,
+> SENSEX, MIDCPNIFTY, FINNIFTY); `ml_pure` is disabled-but-intact, kept
+> alive for the `ml_pipeline_2` training infrastructure that still targets
+> it. Not rewritten this pass — the framing runs through several files and
+> deserves a dedicated pass, not a rushed fix. Treat every "ml_pure is
+> production" statement in this directory as unverified until then; the
+> command syntax, contracts, and env-var names themselves are still accurate.
+
 Layer-4 strategy consumer runtime for snapshot events.
 
 As-of: `2026-04-27`
