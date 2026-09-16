@@ -1,4 +1,17 @@
-# Models Index — BankNifty option-trading brain
+# Models Index
+
+> ## ⚠️ KNOWN STALE (flagged 2026-09-16, not rewritten)
+> Last updated 2026-06-14 — before the sell-side pivot (2026-07-09) and the
+> 5-instrument buyer rollout that followed it. This describes a single
+> pre-pivot BankNifty buy-side ML setup; it does not reflect any of the 4
+> instruments' entry models tuned since (see per-instrument memory:
+> BankNifty/NIFTY/SENSEX/FINNIFTY/MIDCPNIFTY each now have their own
+> threshold/exit-tuned config). The specific "Live .env.compose has wrong
+> X — needs manual fix" claims below are 3 months old and unverified against
+> current config; do not act on them without re-checking `.env.compose`
+> directly first. Kept (not archived) for the still-relevant "direction is
+> a ~50% coin flip, don't rebuild it" verdict, which nothing since has
+> overturned.
 
 _Living index of every model in the system: what it predicts, its label, features, status, and what each still needs. Last updated 2026-06-14._
 

@@ -284,10 +284,14 @@ python -m strategy_app.main --engine ml_pure \
 | [`market_data_dashboard/README.md`](market_data_dashboard/README.md) | All endpoints, env vars, model catalog, operator halt |
 
 ### Historical record (do not update)
+2026-09-16: the 3 `strategy_app/docs/*` rows below physically moved to
+`docs/archive/strategy_app_historical/` in the doc-consolidation pass
+(they were already labeled historical here, just not archived yet).
+
 | Doc | Note |
 |---|---|
-| `strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md` | Archived baseline |
-| `strategy_app/docs/TECHNICAL_BRIEFING_CODE_REVIEW_2026-03-19.md` | Archived code review |
-| `strategy_app/docs/code_review_2026-03-19.md` | Archived code review |
+| `docs/archive/strategy_app_historical/CURRENT_EVALUATION_BASELINE_2026-04-04.md` | Archived baseline |
+| `docs/archive/strategy_app_historical/TECHNICAL_BRIEFING_CODE_REVIEW_2026-03-19.md` | Archived code review |
+| `docs/archive/strategy_app_historical/code_review_2026-03-19.md` | Archived code review |
 | `ml_pipeline_2/docs/training/MODEL_STATE_20260426.md` | Pre-C1 research snapshot |
 | `ml_pipeline_2/docs/training/MODEL_STATE_20260428.md` | Pre-C1 research snapshot |

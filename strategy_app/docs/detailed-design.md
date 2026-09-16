@@ -280,4 +280,5 @@ This supports replay/prod parity for controlled experiments.
 - Root `strategy_app/*.md` files are migration stubs.
 - Update this document when engine order, position ownership, or decision schema changes.
 - Current snapshot-to-decision reference: `strategy_app/docs/STRATEGY_ML_FLOW.md`.
-- Engine consolidation status is tracked in `strategy_app/docs/ENGINE_CONSOLIDATION_PLAN.md`.
+- Engine consolidation is complete (see `strategy_app/docs/README.md` for current engine state); the plan
+  that tracked it is archived at `docs/archive/strategy_app_historical/ENGINE_CONSOLIDATION_PLAN.md`.

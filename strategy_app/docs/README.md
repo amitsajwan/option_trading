@@ -290,10 +290,18 @@ Shared fixtures are in `strategy_app/tests/fixtures.py` (`make_snapshot`, `make_
 | [RELEASE_READINESS_CHECKLIST.md](RELEASE_READINESS_CHECKLIST.md) | Go-live gate checklist |
 | [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) | Feature completion status |
 | [strategy_catalog.md](strategy_catalog.md) | All registered strategy names and their roles |
-| [ENGINE_CONSOLIDATION_PLAN.md](ENGINE_CONSOLIDATION_PLAN.md) | Engine consolidation design |
 | [DETERMINISTIC_V2_ARCHITECTURE.md](DETERMINISTIC_V2_ARCHITECTURE.md) | Deterministic V2 architecture |
 | [STRATEGY_RESEARCH_FINDINGS_2026-02-28.md](STRATEGY_RESEARCH_FINDINGS_2026-02-28.md) | Research findings (historical) |
-| [CURRENT_EVALUATION_BASELINE_2026-04-04.md](CURRENT_EVALUATION_BASELINE_2026-04-04.md) | Current evaluation baseline |
-| [PRODUCT_CLOSURE_PROGRAM.md](PRODUCT_CLOSURE_PROGRAM.md) | Product closure and wind-down plan |
 | [detailed-design.md](detailed-design.md) | Detailed component design |
-| [code_review_2026-03-19.md](code_review_2026-03-19.md) | Code review findings (historical) |
+
+2026-09-16: 5 files removed from this table and moved to
+[`../../docs/archive/strategy_app_historical/`](../../docs/archive/strategy_app_historical/)
+— each already self-declared historical/complete in its own text but was
+still listed here as if current: `ENGINE_CONSOLIDATION_PLAN.md` (status:
+Complete, points back to this README for current state — a self-reference
+loop), `CURRENT_EVALUATION_BASELINE_2026-04-04.md` (its own banner says
+"Archived baseline, do not update"), `PRODUCT_CLOSURE_PROGRAM.md` (a
+delivery plan whose 5 listed next-tasks all shipped as the docs still in
+this table), `code_review_2026-03-19.md` and
+`TECHNICAL_BRIEFING_CODE_REVIEW_2026-03-19.md` (both headed "Historical
+record, not maintained").
