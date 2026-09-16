@@ -1,8 +1,9 @@
 # Onboarding a new instrument
 
 Distilled from FINNIFTY's onboarding (2026-08-03/04) — the third instrument
-after BankNifty and NIFTY. Read this before starting; run the preflight
-checker throughout, not just at the end.
+after BankNifty and NIFTY (SENSEX and MIDCPNIFTY followed the same checklist
+since). Read this before starting; run the preflight checker throughout,
+not just at the end.
 
 There is no one-click generator. This is a validation-first checklist: the
 same checks the CI lint (`tests/test_instrument_hardcoding_lint.py`) runs are

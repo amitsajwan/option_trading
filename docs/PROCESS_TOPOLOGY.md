@@ -11,8 +11,12 @@ Use exactly one runtime path at a time:
 
 Do not run Compose and local launchers together.
 
-Supported live runtime lane is `ml_pure`.
-Use `deterministic` here for replay and diagnosis only.
+> ⚠️ 2026-09-16: this is backwards. Verified `.env.compose` has
+> `STRATEGY_ENGINE=deterministic` (compose files default to it too) --
+> `deterministic` is the actual live lane across all 5 paper instruments
+> today; `ml_pure` is disabled-but-intact. `docs/TEAM_ONBOARDING.md`
+> (§ engine table) has this correct; `docs/ARCHITECTURE.md` and
+> `strategy_app/docs/*` have the same reversal, flagged separately.
 
 ## 2. Compose Topology
 
