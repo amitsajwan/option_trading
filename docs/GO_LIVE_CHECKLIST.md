@@ -1,5 +1,30 @@
 # GO-LIVE CHECKLIST — verify before starting REAL money
 
+> ## ⚠️ KNOWN STALE (flagged 2026-09-16, not yet rewritten)
+> This entire checklist dates to 2026-06-27, before the 5-instrument
+> multi-container rollout (BankNifty/NIFTY/FINNIFTY/SENSEX/MIDCPNIFTY). Do
+> **not** use any command, container name, VM name/IP, or tuning value below
+> literally:
+> - VM is `trader-runtime-01` @ `8.231.101.82`, project `trader-502012` — not
+>   `option-trading-runtime-01` / `34.14.171.45`.
+> - Container names now carry an instrument suffix (`strategy_app_nifty`,
+>   `execution_app_sensex`, etc.), not the bare `option_trading-strategy_app-1`
+>   form used throughout this doc.
+> - Config source of truth is `docker compose --env-file .env.compose` — the
+>   `ops/strategy_config.yml` claim below is wrong.
+> - §0.4's Kite-token check is not part of the current live path; Dhan token
+>   refresh is automated (see `docs/runbooks/LIVE_SETUP_GUIDE.md` Phase 8).
+> - The specific tuning values in §1's reference table (exit/risk/strike
+>   params) are a June snapshot for one instrument, not current — each of the
+>   5 instruments now has its own tuned values (see per-instrument memory).
+>
+> The **structure/methodology** below (pre-flight gates, gate-by-gate log
+> verification, kill-switch, monitoring) is still sound and worth following —
+> just re-derive the actual VM/container/config names and values per
+> instrument before trusting any literal command here.
+
+---
+
 *Run top to bottom on the runtime VM each morning before enabling real orders.
 VM: `option-trading-runtime-01` (asia-south1-b). Dashboard: `http://34.14.171.45:8008/`.
 Every step has a command, the GOOD result, and the action if it fails.

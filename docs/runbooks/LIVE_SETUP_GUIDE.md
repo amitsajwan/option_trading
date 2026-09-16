@@ -619,42 +619,53 @@ bash ./ops/gcp/delete_training_vm.sh
 
 ---
 
-## Phase 8: Kite API Authentication
+## Phase 8: Dhan API Authentication
 
-The live runtime needs a daily access token from Kite Connect.
-Tokens expire at midnight IST. You must refresh the token before each trading day.
+2026-09-16: rewritten — the broker is Dhan, not Kite. The `.env.compose` in
+this repo carries no `KITE_API_KEY`/`KITE_ACCESS_TOKEN` today; the Kite
+browser-auth flow described in older revisions of this phase
+(`ingestion_app.kite_auth`, `start_runtime_interactive.sh`'s Kite prompts)
+still exists in code but is not part of the current live path. Kite remains
+available as an `EXECUTION_ADAPTER=kite` option if ever needed again, but the
+setup below is what a fresh live deploy actually needs.
 
-### 8.1 Where to get API key and secret
+The live runtime needs a Dhan access token. Unlike Kite's old manual daily
+browser login, this is **fully automated** — no operator action needed once
+set up.
 
-1. Log in at https://developers.kite.trade/
-2. Create or open your app
-3. Copy the **API key** and **API secret**
+### 8.1 One-time credential setup
 
-### 8.2 Set credentials in operator.env
-
-```bash
-KITE_API_KEY="your-api-key"
-KITE_API_SECRET="your-api-secret"
-```
-
-The live deploy helper reads these to run the browser auth flow.
-
-### 8.3 Run browser auth
+Create `/opt/option_trading/.env.totp` on the VM (NOT `.env.compose` — this is
+a separate, more durable credential file) with:
 
 ```bash
-python3 -m ingestion_app.kite_auth --force
+DHAN_CLIENT_ID="your-client-id"
+DHAN_PIN="your-pin"
+DHAN_TOTP_SECRET="your-totp-secret"
 ```
 
-This:
-1. Generates a Kite login URL and opens it in your browser
-2. Waits for you to complete the login in the browser
-3. Captures the `request_token` from the redirect
-4. Exchanges it for an `access_token`
-5. Writes `ingestion_app/credentials.json`
+This file is the actual long-lived credential. The `DHAN_ACCESS_TOKEN` in
+`.env.compose` rotates and is worthless on its own without this file.
 
-`credentials.json` contains `api_key` and `access_token`. Keep this file local — do not commit it.
+### 8.2 Install the automated refresh
 
-The live deploy helper (`start_runtime_interactive.sh`) will prompt to run this auth, check credentials state, and sync `KITE_API_KEY` + `KITE_ACCESS_TOKEN` into `.env.compose` before publishing.
+```bash
+bash ./ops/gcp/install_dhan_token_units.sh
+```
+
+This installs systemd units that:
+1. Run `ops/gcp/dhan_totp_refresh.py`, which reads `.env.totp`, generates a
+   TOTP code, and mints a fresh 24h access token from Dhan directly (stdlib
+   only, no dependency on a prior valid token)
+2. Write the new `DHAN_ACCESS_TOKEN` into `.env.compose`
+3. Recreate containers only on success — a `dhan_token_guard.sh` timer
+   retries within 15 minutes on failure
+
+### 8.3 Manual refresh (if ever needed)
+
+```bash
+python3 ops/gcp/dhan_totp_refresh.py
+```
 
 ---
 
@@ -672,8 +683,10 @@ The interactive helper:
 1. Downloads the current approved release from the runtime-config bucket
 2. Shows: `run_id`, `model_group`, `app_image_tag`
 3. Applies the ml_pure release handoff into `.env.compose`
-4. Prompts for Kite browser auth or confirms existing credentials are valid
-5. Runs shared live preflight (release manifest, runtime bundle, GHCR images, Kite state)
+4. Optionally offers Kite browser auth (menu says "optional Kite auth" —
+   this is a legacy path, not required; `DHAN_ACCESS_TOKEN` refresh is
+   handled separately and automatically, see Phase 8)
+5. Runs shared live preflight (release manifest, runtime bundle, GHCR images)
 6. Publishes the runtime config bundle to GCS
 7. Starts or restarts the runtime VM
 
@@ -682,7 +695,6 @@ Preflight blocks if any of these are missing or wrong:
 - `STRATEGY_ROLLOUT_STAGE` not `capped_live`
 - `STRATEGY_POSITION_SIZE_MULTIPLIER` > 0.25
 - `STRATEGY_ML_RUNTIME_GUARD_FILE` missing or not pointing to a valid guard
-- Kite credentials missing or stale
 - GHCR images not found for the release tag
 
 If preflight blocks, fix the blocker and re-run.

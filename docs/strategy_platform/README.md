@@ -1,19 +1,22 @@
 # strategy_platform — current strategy & config docs
 
-The live strategy-platform references. (Older numbered docs `00–05`, the dead
-config-consolidation plan/registry, and superseded gate write-ups moved to
-[../archive/strategy_platform_old/](../archive/strategy_platform_old/).)
+The live strategy-platform references, as of 2026-09-16. (Older numbered docs
+`00–05`, the dead config-consolidation plan/registry, superseded gate
+write-ups, and — as of 2026-09-16 — the pre-Dhan-migration entry-pipeline and
+deployment-state docs that used to be listed here, all moved to
+[../archive/strategy_platform_old/](../archive/strategy_platform_old/); they
+describe the Kite-era system and are historical only.)
 
 | Doc | What |
 |---|---|
-| [ENTRY_PIPELINE_AND_OBSERVABILITY_2026-06-21.md](ENTRY_PIPELINE_AND_OBSERVABILITY_2026-06-21.md) | **Authoritative entry flow** — ML floor, cost gate (arm B), feature-health, VIX fix, depth, threshold rationale. Read first for the decision path. |
-| [LIVE_SYSTEM_STATE_2026-06-20.md](LIVE_SYSTEM_STATE_2026-06-20.md) | **Current deployment** — what's running, what branch, SIM verification, monitoring checklist. |
-| [COMPRESSION_ENTRY_FINDINGS_2026.md](COMPRESSION_ENTRY_FINDINGS_2026.md) | Entry model `entry_compression_v1` — validation, architecture, config, seller system. |
 | [CONFIG.md](CONFIG.md) | **Config — one source** (`.env.compose`) + switchable profiles + deploy. |
+| [EXIT_SYSTEM.md](EXIT_SYSTEM.md) | The exit policy stack (`EXIT_STRATEGY_MODE`) — adaptive/lottery modes, no legacy inline exit path. |
 | [DIRECTION_STRATEGY_SYNTHESIS.md](DIRECTION_STRATEGY_SYNTHESIS.md) | Direction: every proof + the regime-conditioned confluence council. Direction = the wall. |
 | [OPPORTUNITY_GATE_DESIGN.md](OPPORTUNITY_GATE_DESIGN.md) | Selection Gate 1 — rank-relative-to-today + cost floor + budget (replaces the absolute ATR cliff). |
 
-For the whole pipeline (how these fit together): **[../SYSTEM_FLOW.md](../SYSTEM_FLOW.md)**.
+For the whole pipeline (how these fit together): **[../SYSTEM_FLOW.md](../SYSTEM_FLOW.md)**. For
+current live/paper status per instrument, see the root **[README.md](../../README.md)**
+(note its own known-stale banner) rather than anything in this folder or its archive.
 
 ## Core principles (unchanged)
 1. **Loose coupling** — components talk over Redis/Mongo contracts, not direct calls.
