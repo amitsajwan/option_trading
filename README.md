@@ -4,6 +4,21 @@
 
 As-of: `2026-05-12`
 
+> **KNOWN STALE (flagged 2026-09-16, not yet fully rewritten)**: this doc
+> predates the current 5-instrument system (NIFTY/BankNifty/FINNIFTY/SENSEX/
+> MIDCPNIFTY) and the Dhan migration -- treat the sections below as historical
+> context, not current state. One specific correction: the "Live State"
+> section below claiming no GCP project is provisioned is **wrong** -- the
+> current infra is project `trader-502012`, VM `trader-runtime-01`, actively
+> running paper-only trading (buyer entry models) across all 5 instruments,
+> plus a separate credit-spread "seller" subsystem: BankNifty/NIFTY sellers
+> were real-money-capable but have been dead (SIGKILLed) since 2026-09-08,
+> resume decision explicitly left to the operator; SENSEX/FINNIFTY sellers
+> are currently paper-mode; MIDCPNIFTY has no seller yet. See
+> `docs/SYSTEM_SOURCE_OF_TRUTH.md`'s own staleness banner and Claude's memory
+> system for further current-state detail. A full rewrite of this file is a
+> separate, larger task than this cleanup pass covered.
+
 ---
 
 ## What This System Is
@@ -16,7 +31,7 @@ The ML pipeline (`ml_pipeline_2`) trains offline (locally or on a training VM) a
 
 ## Live State
 
-**No GCP project is currently provisioned.** The previous project (`amittrading-493606`) is gone. All artifacts that matter — parquet training data, published models, runtime config, runtime guard — are backed up locally under the repo. Live trading and runtime VM hosting need a new GCP project (rebuild via [`docs/runbooks/RECOVERY_RUNBOOK.md`](docs/runbooks/RECOVERY_RUNBOOK.md)).
+**[STALE, see banner above] No GCP project is currently provisioned** was true as of 2026-05-12 but is no longer true — the current project is `trader-502012` (VM `trader-runtime-01`). The linked recovery runbook (`docs/runbooks/RECOVERY_RUNBOOK.md`) has since been archived to `docs/archive/ops_historical/RECOVERY_RUNBOOK.md` as Kite-era/pre-Dhan-migration content; see `docs/project_disaster_recovery_audit_2026-09-15` context in Claude's memory system for the current, still-incomplete state of disaster-recovery tooling for this project.
 
 **Configured runtime (will become live once GCP is rebuilt):**
 

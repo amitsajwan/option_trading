@@ -2,6 +2,18 @@
 
 As-of date: **2026-06-14** (updated end-of-day)
 
+> **KNOWN STALE (flagged 2026-09-16, not yet corrected)**: this doc predates the
+> Dhan migration (2026-06-25) and the multi-instrument rollout -- "Kite live
+> feed" below is wrong (live feed is Dhan WS since 2026-06-25) and this doc's
+> BankNifty-only framing no longer reflects the current 5-instrument system
+> (NIFTY/BankNifty/FINNIFTY/SENSEX/MIDCPNIFTY). It may also predate the
+> Redis-Streams migration referenced elsewhere as shipped (see
+> docs/archive/architecture_evolution/). Still cited by docs/README.md,
+> ARCHITECTURE.md, runbooks/README.md, and the root README.md as
+> authoritative -- kept in place rather than archived since those references
+> would otherwise dangle, but treat specifics below as unverified until this
+> banner is removed by someone who does a full pass.
+
 > If active docs conflict with code, code wins. If active docs conflict with each
 > other, this file wins.
 
