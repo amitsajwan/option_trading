@@ -57,20 +57,16 @@ Dated research session logs live in [`training/`](training/). Each file covers o
 
 ## Historical Research Notes
 
-These files are retained for context and evidence. They are not the current operating instruction:
-
-- [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md)
-- [midday_recovery_handover.md](midday_recovery_handover.md)
-- [research_recovery_runbook.md](research_recovery_runbook.md)
-- [stage2_feature_signal_memo_template.md](stage2_feature_signal_memo_template.md)
-- [stage2_midday_redesign.md](stage2_midday_redesign.md)
-- [stage2_midday_target_redesign.md](stage2_midday_target_redesign.md)
-- [stage2_midday_high_conviction.md](stage2_midday_high_conviction.md)
-- [stage2_midday_direction_or_no_trade.md](stage2_midday_direction_or_no_trade.md)
-- [stage2_midday_grid.md](stage2_midday_grid.md)
-- [stage2_recovery_review.md](stage2_recovery_review.md)
-- [stage2_scenario_grid.md](stage2_scenario_grid.md)
-- [stage3_midday_policy_paths.md](stage3_midday_policy_paths.md)
+2026-09-16: moved out of this directory into
+[`../../docs/archive/ml_pipeline_2_bypass_stage2_recovery/`](../../docs/archive/ml_pipeline_2_bypass_stage2_recovery/)
+— these were already self-labeled "not the current operating instruction"
+here but still cluttered this folder alongside the maintained docs above.
+Covers the April 2026 MIDDAY-recovery redesign track and the related
+bypass_stage2 investigation (`JIRA_BYPASS_STAGE2_RECIPE_MODEL_ANALYSIS.md`,
+`STAGE3_RECIPE_INVESTIGATION.md`, `STAGE3_TRADE_LOSS_ANALYSIS.md`,
+`PROPER_TRAINING_STRATEGY_V1.md`, `RECOVERY_BASELINE_20260422.md`), plus the
+12 files previously listed here. See that folder's own index for the full
+list and how the pieces relate.
 
 ## Repo-Level Runbooks
 
