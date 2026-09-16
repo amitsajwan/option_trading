@@ -428,6 +428,16 @@ want to deploy it while research continues in parallel.
 
 ### Pre-conditions
 
+> ⚠️ 2026-09-16: the example below is a real worked case from May 2026 on
+> the `amittrading-493606` project, which no longer exists (current project
+> is `trader-502012`; the disaster-recovery audit this same week confirmed
+> **zero GCS buckets currently exist there** — they'd need provisioning
+> before this flow works at all). Treat the bucket URLs, VM name, and
+> project flag below as illustrative of the shape, not literal values to
+> copy-paste. Same for step 6's "Kite credentials" mention — the current
+> live path uses automated Dhan token refresh instead (see
+> `docs/runbooks/LIVE_SETUP_GUIDE.md` Phase 8).
+
 1. Research run is `mode=completed` (not failed)
 2. `operator.env` on the training VM has real GCS bucket values:
    ```
