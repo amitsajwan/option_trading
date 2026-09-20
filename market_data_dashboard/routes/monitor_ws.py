@@ -125,7 +125,7 @@ def _build_kpi_live(state: _LiveSessionState) -> List[MonitorKpiItem]:
         MonitorKpiItem(label="INSTRUMENT", value=session.instrument, cls="pos", sub=f"live · {session.instrument}"),
         MonitorKpiItem(
             label="SESSION P&L",
-            value=f"{total_pnl:+.2f}%",
+            value=f"{total_pnl:+.2%}",
             cls="pos" if total_pnl >= 0 else "neg",
             sub=f"{len(visible)} trades · {wr:.0f}% WR",
         ),
@@ -161,7 +161,7 @@ def _build_kpi_replay(state: _ReplaySessionState) -> List[MonitorKpiItem]:
         ),
         MonitorKpiItem(
             label="SESSION P&L",
-            value=f"{total_pnl:+.2f}%",
+            value=f"{total_pnl:+.2%}",
             cls="pos" if total_pnl >= 0 else "neg",
             sub=f"{len(visible)} trades · {wr:.0f}% WR",
         ),

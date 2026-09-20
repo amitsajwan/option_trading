@@ -452,10 +452,10 @@ def _render_exit_report(r: ExitReplayResult) -> str:
     for label, getter in [
         ("Trades", lambda a: a.trades),
         ("Win rate", lambda a: f"{100*a.wins/max(a.trades,1):.0f}%"),
-        ("Cumulative P&L", lambda a: f"{a.cumulative_pnl:+.2f}%"),
-        ("Expectancy (per trade)", lambda a: f"{a.expectancy:+.4f}%"),
+        ("Cumulative P&L", lambda a: f"{a.cumulative_pnl:+.2%}"),
+        ("Expectancy (per trade)", lambda a: f"{a.expectancy:+.4%}"),
         ("Profit factor", lambda a: _pf(a.profit_factor)),
-        ("Max drawdown", lambda a: f"{a.max_drawdown:.2f}%"),
+        ("Max drawdown", lambda a: f"{a.max_drawdown:.2%}"),
         (f"Fat-tail capture (avg)", lambda a: f"{a.fat_tail_capture:.2f}" if not math.isnan(a.fat_tail_capture) else "—"),
         ("Fat-tail trades", lambda a: a.fat_tail_trades),
     ]:

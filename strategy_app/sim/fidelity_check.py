@@ -234,7 +234,7 @@ def run_fidelity_check(
         f"| | Live | Sim |",
         f"|---|---|---|",
         f"| Trades | {len(live_trades)} | {len(sim_trades)} |",
-        f"| Session P&L | {live_total:+.4f}% | {sim_total:+.4f}% |",
+        f"| Session P&L | {live_total:+.4%} | {sim_total:+.4%} |",
         f"| Snapshots | — | {len(snapshots)} |",
         "",
     ]
@@ -245,7 +245,7 @@ def run_fidelity_check(
         report_lines.append("")
     else:
         report_lines += [
-            f"Session P&L diff: {session_diff:.6f}% (tolerance {pnl_tolerance:.3f}%)",
+            f"Session P&L diff: {session_diff:.6%} (tolerance {pnl_tolerance:.3%})",
             "All per-trade P&L values match within tolerance.",
         ]
 
@@ -255,9 +255,9 @@ def run_fidelity_check(
     for key in sorted(all_keys):
         live = live_by_key.get(key)
         sim  = sim_by_key.get(key)
-        lp = f"{live['pnl_pct']:+.4f}%" if live else "—"
-        sp = f"{sim['pnl_pct']:+.4f}%" if sim else "—"
-        delta = f"{abs(live['pnl_pct'] - sim['pnl_pct']):.4f}%" if (live and sim) else "—"
+        lp = f"{live['pnl_pct']:+.4%}" if live else "—"
+        sp = f"{sim['pnl_pct']:+.4%}" if sim else "—"
+        delta = f"{abs(live['pnl_pct'] - sim['pnl_pct']):.4%}" if (live and sim) else "—"
         le = live.get("exit_reason", "—") if live else "—"
         se = sim.get("exit", "—") if sim else "—"
         report_lines.append(f"| {key[0]} | {key[1]} | {lp} | {sp} | {delta} | {le} | {se} |")
