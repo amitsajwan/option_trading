@@ -150,6 +150,23 @@ def test_render_report_basic():
     assert "Per-Day Results" in report
 
 
+def test_render_report_percent_scale():
+    """Regression test for a real bug (found 2026-09-20): pnl_pct fields are
+    fractions (0.05 == 5%, matching every other consumer in this codebase --
+    e.g. terminal-live.jsx does `pnl_pct * 100` before display). render_report
+    was missing that *100 in 5 places, silently understating every reported
+    percentage by 100x. A prior version of this test only checked for the
+    presence of section headings, never the actual formatted number, so the
+    bug shipped undetected."""
+    result = _make_result([0.05, -0.02, 0.03, 0.06, -0.01])
+    # sum([0.05, -0.02, 0.03, 0.06, -0.01]) == 0.11 -> must render as 11.00%, not 0.11%.
+    report = render_report(result)
+    assert "+11.00%" in report, report
+    assert "+0.11%" not in report, report
+    # Day 1's pnl_pct=0.05 must render as +5.00%, not +0.05%.
+    assert "+5.00%" in report, report
+
+
 def test_render_report_ab():
     from strategy_app.sim.multi_day_runner import ABResult
 

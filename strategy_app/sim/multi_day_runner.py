@@ -366,10 +366,10 @@ def render_report(result: MultiDayResult, ab: Optional[ABResult] = None) -> str:
     lines.append(_row("Win days", f"{result.win_days} ({_pct(result.win_days, result.total_days)})"))
     lines.append(_row("Total trades", result.total_trades))
     lines.append(_row("Win trades", f"{result.total_wins} ({_pct(result.total_wins, result.total_trades)})"))
-    lines.append(_row("Cumulative P&L", f"{result.cumulative_pnl:+.2f}%"))
-    lines.append(_row("Expectancy (per trade)", f"{result.expectancy:+.4f}%"))
+    lines.append(_row("Cumulative P&L", f"{result.cumulative_pnl * 100:+.2f}%"))
+    lines.append(_row("Expectancy (per trade)", f"{result.expectancy * 100:+.4f}%"))
     lines.append(_row("Profit factor", f"{result.profit_factor:.2f}" if math.isfinite(result.profit_factor) else "∞"))
-    lines.append(_row("Max drawdown", f"{result.max_drawdown:.2f}%"))
+    lines.append(_row("Max drawdown", f"{result.max_drawdown * 100:.2f}%"))
     lines.append(_row("Fat-tail days (>{:.0f}%)".format(result.fat_tail_threshold * 100), result.fat_tail_days))
     lines.append(_row("Error days", result.error_days))
     lines.append("")
@@ -380,8 +380,8 @@ def render_report(result: MultiDayResult, ab: Optional[ABResult] = None) -> str:
         lines.append(_row("Metric", "Config A", "Config B", "Winner"))
         lines.append(_row("---", "---", "---", "---"))
         lines.append(_row("Exit mode", _get_cfg(a, "EXIT_STRATEGY_MODE"), _get_cfg(b, "EXIT_STRATEGY_MODE"), ""))
-        lines.append(_row("Cum P&L", f"{a.cumulative_pnl:+.2f}%", f"{b.cumulative_pnl:+.2f}%", ab.winner_pnl))
-        lines.append(_row("Max DD", f"{a.max_drawdown:.2f}%", f"{b.max_drawdown:.2f}%", ab.winner_dd))
+        lines.append(_row("Cum P&L", f"{a.cumulative_pnl * 100:+.2f}%", f"{b.cumulative_pnl * 100:+.2f}%", ab.winner_pnl))
+        lines.append(_row("Max DD", f"{a.max_drawdown * 100:.2f}%", f"{b.max_drawdown * 100:.2f}%", ab.winner_dd))
         lines.append(_row("Profit factor",
                           f"{a.profit_factor:.2f}" if math.isfinite(a.profit_factor) else "∞",
                           f"{b.profit_factor:.2f}" if math.isfinite(b.profit_factor) else "∞", ""))
@@ -402,7 +402,7 @@ def render_report(result: MultiDayResult, ab: Optional[ABResult] = None) -> str:
         lines.append(_row(
             day.trade_date,
             day.trade_count,
-            f"{day.pnl:+.2f}%",
+            f"{day.pnl * 100:+.2f}%",
             _pct(day.win_count, day.trade_count),
             pf_str,
             day.error or "",
