@@ -65,6 +65,13 @@ ALLOWLIST_PATHS: dict[str, str] = {
         "doc/config staleness issue -- see project_docs_consolidation_2026-09-16 "
         "in memory"
     ),
+    "ops/check_stale_infra_refs.py": (
+        "this file's own RETIRED registry necessarily contains these exact "
+        "strings as data (that's the whole point) -- it isn't live usage. "
+        "Didn't self-flag the first time this script was tested because it "
+        "wasn't yet git-tracked at that point; caught on the next run after "
+        "it was committed."
+    ),
 }
 
 
