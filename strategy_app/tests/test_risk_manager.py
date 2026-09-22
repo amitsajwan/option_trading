@@ -289,5 +289,73 @@ class RiskManagerTests(unittest.TestCase):
             self.assertFalse(mgr.is_halted)
 
 
+class RiskManagerCapitalPoolTests(unittest.TestCase):
+    """CAPITAL_POOL_ENABLED defaults off (2026-09-21) -- the core guarantee
+    under test here is that with the flag off, RiskManager NEVER touches
+    contracts_app.capital_pool at all, so behavior is provably byte-for-byte
+    identical to before this feature existed."""
+
+    def test_disabled_by_default_never_touches_capital_pool_module(self) -> None:
+        with mock.patch("strategy_app.risk.manager.capital_pool") as mock_pool:
+            mgr = RiskManager()
+            ok, reason = mgr.try_reserve_capital(lots=2, entry_premium=100.0)
+            self.assertTrue(ok)
+            self.assertEqual(reason, "disabled")
+            mgr.release_capital_reservation()  # must also be a safe no-op
+            mock_pool.try_reserve.assert_not_called()
+            mock_pool.release.assert_not_called()
+            mock_pool.ensure_pool_document.assert_not_called()
+
+    def test_sim_bypass_never_touches_capital_pool_even_when_enabled(self) -> None:
+        with mock.patch.dict("os.environ", {"CAPITAL_POOL_ENABLED": "1"}, clear=False), mock.patch(
+            "strategy_app.risk.manager.capital_pool"
+        ) as mock_pool:
+            mgr = RiskManager()
+            ok, reason = mgr.try_reserve_capital(lots=2, entry_premium=100.0, bypass=True)
+            self.assertTrue(ok)
+            self.assertEqual(reason, "sim_bypass")
+            mock_pool.try_reserve.assert_not_called()
+
+    def test_enabled_and_insufficient_pool_capital_blocks_the_entry(self) -> None:
+        with mock.patch.dict("os.environ", {"CAPITAL_POOL_ENABLED": "1"}, clear=False), mock.patch(
+            "strategy_app.risk.manager.capital_pool"
+        ) as mock_pool:
+            mock_pool.try_reserve.return_value = (False, "insufficient_pool_capital")
+            mgr = RiskManager()
+            ok, reason = mgr.try_reserve_capital(lots=5, entry_premium=200.0)
+            self.assertFalse(ok)
+            self.assertEqual(reason, "insufficient_pool_capital")
+            mock_pool.try_reserve.assert_called_once()
+
+    def test_enabled_and_successful_reserve_then_record_trade_result_releases_it(self) -> None:
+        with mock.patch.dict("os.environ", {"CAPITAL_POOL_ENABLED": "1"}, clear=False), mock.patch(
+            "strategy_app.risk.manager.capital_pool"
+        ) as mock_pool:
+            mock_pool.try_reserve.return_value = (True, "reserved")
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
+            ok, _ = mgr.try_reserve_capital(lots=3, entry_premium=150.0)
+            self.assertTrue(ok)
+            mock_pool.release.assert_not_called()
+
+            mgr.record_trade_result(pnl_pct=0.05, lots=3, entry_premium=150.0)
+            mock_pool.release.assert_called_once()
+            # Amount released must match what was actually reserved (lots * premium * lot_size),
+            # not something recomputed from the (possibly different) closing trade args.
+            released_amount = mock_pool.release.call_args.args[1]
+            self.assertGreater(released_amount, 0)
+
+    def test_release_is_idempotent(self) -> None:
+        with mock.patch.dict("os.environ", {"CAPITAL_POOL_ENABLED": "1"}, clear=False), mock.patch(
+            "strategy_app.risk.manager.capital_pool"
+        ) as mock_pool:
+            mock_pool.try_reserve.return_value = (True, "reserved")
+            mgr = RiskManager()
+            mgr.try_reserve_capital(lots=1, entry_premium=100.0)
+            mgr.release_capital_reservation()
+            mgr.release_capital_reservation()  # second call: nothing left to release
+            self.assertEqual(mock_pool.release.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

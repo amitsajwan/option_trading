@@ -17,6 +17,7 @@ from contracts_app import (
     merge_decision_metrics,
     normalize_decision_mode,
     normalize_reason_code,
+    now_ist,
     strategy_decision_trace_topic,
     strategy_position_topic,
     strategy_vote_topic,
@@ -509,6 +510,49 @@ class SignalLogger:
                     position_id=exit_signal.position_id,
                     signal_id=record["signal_id"],
                     snapshot_id=close_snapshot_id,
+                ),
+            ),
+        )
+
+    def log_position_cancel(self, position: PositionContext, reason: str) -> None:
+        """A position the broker never actually filled (fill-truth,
+        tracker.py::cancel_position) -- NOT an exit, no P&L, no exit signal.
+
+        Added 2026-09-21 alongside the shared capital pool: without this,
+        a cancelled phantom position was invisible to positions.jsonl
+        entirely (cancel_position() only appended to an in-memory list),
+        so a reconciliation pass replaying the JSONL to compute "what's
+        actually still open" would wrongly treat it as open forever. Purely
+        additive -- no existing reader filters on this event type.
+        """
+        record = self._position_event_base(
+            position,
+            event="POSITION_CANCELLED",
+            snapshot_id=str(position.entry_snapshot_id or "").strip() or None,
+            timestamp=now_ist(),
+        )
+        record["reason"] = f"cancelled_{reason}"
+        record["pnl_pct"] = 0.0
+        record = normalize_record_timestamps(record)
+        # Same durability bar as OPEN/CLOSE (ARCHITECTURE.md §9): a reconciler
+        # correctness depends on this row existing, so a dropped write must
+        # be as loud as a dropped OPEN/CLOSE.
+        ok = append_jsonl(self._positions_path, record, logger=logger, fsync=True)
+        if not ok:
+            self._health.mark_failure(
+                reason="jsonl_append_failed",
+                event_type="POSITION_CANCELLED",
+                details=f"path={self._positions_path} position_id={position.position_id}",
+            )
+        self._publish(
+            strategy_position_topic(),
+            build_strategy_position_event(
+                position=record,
+                source="strategy_app",
+                metadata=self._metadata(
+                    position_id=position.position_id,
+                    signal_id=position.signal_id,
+                    snapshot_id=record["snapshot_id"],
                 ),
             ),
         )

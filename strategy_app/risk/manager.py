@@ -7,6 +7,9 @@ import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+from contracts_app import current_instrument, known_instruments
+from contracts_app import capital_pool
+
 from ..contracts import PositionContext, RiskContext
 from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
 from ..market.snapshot_accessor import SnapshotAccessor
@@ -23,7 +26,7 @@ from ..constants import (
     RISK_PROFILE_AGGRESSIVE_SAFE_V1,
     resolve_lot_size,
 )
-from ..utils.env import env_float, env_int
+from ..utils.env import env_bool, env_float, env_int
 
 _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
     RISK_PROFILE_AGGRESSIVE_SAFE_V1: {
@@ -61,7 +64,18 @@ class RiskManager:
         self._notional_per_trade = 0.0
         self._lot_budget_uses_lot_size = True
         self._confidence_floor = 0.65
+        # Shared capital pool (2026-09-21) -- off by default. See
+        # contracts_app/capital_pool.py for the atomic reserve/release
+        # primitive this wraps. `_active_reservation_amount` tracks the ONE
+        # reservation this process can have outstanding, matching
+        # PositionTracker's one-position-per-instrument invariant.
+        self._pool_enabled = env_bool("CAPITAL_POOL_ENABLED", False)
+        self._pool_total = env_float("CAPITAL_POOL_TOTAL_RS", 400_000.0) or 400_000.0
+        self._pool_instrument_cap_pct = env_float("CAPITAL_POOL_MAX_INSTRUMENT_SHARE", 0.40) or 0.40
+        self._active_reservation_amount: float = 0.0
         self._load_config()
+        if self._pool_enabled:
+            capital_pool.ensure_pool_document(self._pool_total, instruments=known_instruments())
 
     def _cfg_float(self, key: str, fallback: float) -> float:
         default = float(self._profile_defaults.get(key, fallback))
@@ -205,6 +219,7 @@ class RiskManager:
         self._check_vix_spike(snap)
 
     def record_trade_result(self, *, pnl_pct: float, lots: int = 1, entry_premium: float = 0.0) -> None:
+        self.release_capital_reservation()
         ctx = self._context
         trade_pnl_value = pnl_pct * entry_premium * lots * resolve_lot_size()
         pnl_as_capital_pct = (trade_pnl_value / ctx.capital_allocated) if ctx.capital_allocated > 0 else 0.0
@@ -256,6 +271,43 @@ class RiskManager:
         base_lots = int(risk_capital / max_loss_per_lot)
         scaled = max(1, int(base_lots * confidence_scale))
         return min(scaled, ctx.max_lots_per_trade)
+
+    def try_reserve_capital(self, *, lots: int, entry_premium: float, bypass: bool = False) -> tuple[bool, str]:
+        """Reserve this instrument's share of the shared capital pool for an
+        about-to-open position of `lots` lots at `entry_premium`.
+
+        Returns (True, reason) when the caller may proceed unchanged;
+        (False, reason) means the caller must block this entry, the same
+        way an operator_halt block is handled today.
+
+        `bypass=True` (sim/replay run ids) and CAPITAL_POOL_ENABLED=0 (the
+        default) both short-circuit BEFORE `contracts_app.capital_pool` is
+        ever imported-from-use -- this is the safety-by-default guarantee:
+        with the flag off, this method never touches Mongo, never touches
+        the shared pool, and always returns (True, ...), so behavior is
+        byte-for-byte identical to before this feature existed.
+        """
+        if not self._pool_enabled:
+            return True, "disabled"
+        if bypass:
+            return True, "sim_bypass"
+        amount = float(entry_premium) * int(lots) * resolve_lot_size()
+        if amount <= 0:
+            return True, "zero_amount"
+        cap = self._pool_total * self._pool_instrument_cap_pct
+        ok, reason = capital_pool.try_reserve(current_instrument(), amount, per_instrument_cap=cap)
+        if ok:
+            self._active_reservation_amount = amount
+        return ok, reason
+
+    def release_capital_reservation(self) -> None:
+        """Idempotent -- a no-op if the pool is disabled or nothing is
+        currently reserved (e.g. this entry never called try_reserve_capital,
+        or a previous release already cleared it)."""
+        if not self._pool_enabled or self._active_reservation_amount <= 0:
+            return
+        capital_pool.release(current_instrument(), self._active_reservation_amount)
+        self._active_reservation_amount = 0.0
 
     def live_eligible(self, *, grade: str, confidence: float = 1.0) -> tuple[bool, str]:
         """Whether an entry of this quality would be taken on REAL money.

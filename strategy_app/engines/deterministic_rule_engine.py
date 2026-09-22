@@ -712,7 +712,10 @@ class DeterministicRuleEngine(StrategyEngine):
                                 position.stop_price = position.stop_price * scale
                             position.high_water_premium = max(position.high_water_premium, fp)
                     else:
-                        self._tracker.cancel_position(f"broker_{status or 'unfilled'}")
+                        _cancel_reason = f"broker_{status or 'unfilled'}"
+                        self._tracker.cancel_position(_cancel_reason)
+                        self._log.log_position_cancel(position, _cancel_reason)
+                        self._risk.release_capital_reservation()
                         self._await_fill = None
                         return None
                 else:
@@ -720,6 +723,8 @@ class DeterministicRuleEngine(StrategyEngine):
                     max_bars = int(os.getenv("FILL_CONFIRM_BARS", "5") or 5)
                     if aw["bars"] >= max_bars:
                         self._tracker.cancel_position("fill_confirm_timeout")
+                        self._log.log_position_cancel(position, "fill_confirm_timeout")
+                        self._risk.release_capital_reservation()
                         self._await_fill = None
                         return None
             except Exception:
@@ -1714,6 +1719,27 @@ class DeterministicRuleEngine(StrategyEngine):
             underlying_stop_pct = float(cfg_underlying.underlying_stop_pct)
         if underlying_target_pct is None and cfg_underlying.underlying_target_pct is not None:
             underlying_target_pct = float(cfg_underlying.underlying_target_pct)
+
+        entry_lots = self._risk.compute_lots(
+            entry_premium=premium,
+            stop_loss_pct=stop_loss_pct,
+            confidence=combined_confidence,
+        )
+        # Shared capital pool (2026-09-21, off by default via CAPITAL_POOL_ENABLED):
+        # reserve this instrument's share BEFORE the position is opened, not after.
+        # Sim/replay runs always bypass — the shared live pool document must never
+        # be touched by a backtest regardless of the flag.
+        _capital_pool_bypass = str(self._run_id or "").strip().lower().startswith(("sim-", "replay-"))
+        _capital_ok, _capital_reason = self._risk.try_reserve_capital(
+            lots=entry_lots, entry_premium=premium, bypass=_capital_pool_bypass,
+        )
+        if not _capital_ok:
+            logger.info(
+                "entry blocked: capital_pool reason=%s lots=%d premium=%.2f",
+                _capital_reason, entry_lots, premium,
+            )
+            return None
+
         signal = TradeSignal(
             signal_id=str(uuid.uuid4())[:8],
             timestamp=snap.timestamp_or_now,
@@ -1756,11 +1782,7 @@ class DeterministicRuleEngine(StrategyEngine):
             oi_trail_min_lock_pct=trailing_cfg.oi_trail.min_lock_pct,
             oi_trail_priority_over_regime=trailing_cfg.oi_trail.priority_over_regime,
             oi_trail_regime_filter=trailing_cfg.oi_trail.regime_filter,
-            max_lots=self._risk.compute_lots(
-                entry_premium=premium,
-                stop_loss_pct=stop_loss_pct,
-                confidence=combined_confidence,
-            ),
+            max_lots=entry_lots,
             entry_strategy_name=best_vote.strategy_name,
             entry_regime_name=regime_signal.regime.value,
             source="RULE",

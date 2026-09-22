@@ -359,10 +359,13 @@ def surface_checks(instrument: str) -> list[tuple[str, bool, str]]:
     add("deploy.sh CORE_SERVICES", not missing_core,
         f"append: {' '.join(missing_core)}" if missing_core else "")
 
-    # 10. config contract entries
+    # 10. config contract entries. stopped_services (added 2026-09-20 for the
+    # dead BankNifty/NIFTY sellers, see check_config_contract.py) is a valid
+    # home for a surface too -- it just means the surface is intentionally
+    # not running right now, not that it was never wired.
     try:
         contract = json.loads(_read("ops/config_contract_expected.json"))
-        services = set(contract.get("services", {}))
+        services = set(contract.get("services", {})) | set(contract.get("stopped_services", {}))
     except Exception:
         services = set()
     needed_contract = {f"option_trading-strategy_app{sfx}-1",

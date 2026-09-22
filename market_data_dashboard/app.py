@@ -4083,6 +4083,17 @@ except Exception as _replay_exc:  # pragma: no cover
     import logging as _rlog
     _rlog.getLogger(__name__).warning("replay routes failed: %s", _replay_exc)
 
+# ── Shared capital pool status (2026-09-21) ───────────────────────────────────
+try:
+    from .routes.capital_pool_routes import CapitalPoolRouter as _CapitalPoolRouter
+except ImportError:
+    from market_data_dashboard.routes.capital_pool_routes import CapitalPoolRouter as _CapitalPoolRouter  # type: ignore
+try:
+    app.include_router(_CapitalPoolRouter().router)
+except Exception as _capital_pool_exc:  # pragma: no cover
+    import logging as _cplog
+    _cplog.getLogger(__name__).warning("capital pool routes failed: %s", _capital_pool_exc)
+
 # Backward-compatible callables used by local tests/imports.
 home = _operator_routes.home
 live_strategy = _operator_routes.live_strategy
