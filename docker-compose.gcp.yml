@@ -407,7 +407,7 @@ services:
       RISK_LOT_BUDGET_USES_LOT_SIZE: "${BANKNIFTY_RISK_LOT_BUDGET_USES_LOT_SIZE:-${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}}"
       RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
       RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
-      RISK_MAX_SESSION_TRADES: "${RISK_MAX_SESSION_TRADES:-6}"
+      RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_LOTS_PER_TRADE: "${BANKNIFTY_RISK_MAX_LOTS_PER_TRADE:-${RISK_MAX_LOTS_PER_TRADE:-5}}"
       RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
       RISK_CAPITAL_ALLOCATED: "${BANKNIFTY_RISK_CAPITAL_ALLOCATED:-${RISK_CAPITAL_ALLOCATED:-500000}}"
@@ -1468,7 +1468,7 @@ services:
       RISK_LOT_BUDGET_USES_LOT_SIZE: "${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}"
       RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
       RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
-      RISK_MAX_SESSION_TRADES: "${RISK_MAX_SESSION_TRADES:-6}"
+      RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_LOTS_PER_TRADE: "${RISK_MAX_LOTS_PER_TRADE:-5}"
       RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
       RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
@@ -1706,7 +1706,7 @@ services:
       RISK_LOT_BUDGET_USES_LOT_SIZE: "${BANKNIFTY_RISK_LOT_BUDGET_USES_LOT_SIZE:-${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}}"
       RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
       RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
-      RISK_MAX_SESSION_TRADES: "${RISK_MAX_SESSION_TRADES:-6}"
+      RISK_MAX_SESSION_TRADES: "6"
       RISK_MAX_LOTS_PER_TRADE: "${BANKNIFTY_RISK_MAX_LOTS_PER_TRADE:-${RISK_MAX_LOTS_PER_TRADE:-5}}"
       RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
       RISK_CAPITAL_ALLOCATED: "${BANKNIFTY_RISK_CAPITAL_ALLOCATED:-${RISK_CAPITAL_ALLOCATED:-500000}}"
@@ -2833,6 +2833,14 @@ services:
       TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:nifty:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:nifty:strategy:decision_trace:v1"
+      # 2026-09-25 BUGFIX: was never set here, so FillFeedback (see
+      # strategy_app/position/fill_feedback.py) silently fell back to the
+      # bare "execution:fills:v1" default -- a stream execution_app_nifty
+      # never publishes to (it publishes to the stream below). Real fills
+      # went unconfirmed, and after FILL_CONFIRM_BARS timeout live positions
+      # were wrongly marked POSITION_CANCELLED / fill_confirm_timeout. Must
+      # exactly match EXECUTION_FILLS_STREAM in execution_app_nifty's block.
+      EXECUTION_FILLS_STREAM: "execution:nifty:fills:v1"
       # Models — files must exist in ./models/ (mounted as /app/models:ro)
       # Override via NIFTY_ENTRY_ML_MODEL_PATH in .env.compose; defaults to the
       # committed bundle. Do NOT leave blank — strategy_app produces zero votes.
@@ -2990,6 +2998,15 @@ services:
       TRADE_SIGNAL_TOPIC: "market:midcpnifty:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:midcpnifty:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:midcpnifty:strategy:decision_trace:v1"
+      # 2026-09-25 BUGFIX: was never set here, so FillFeedback (see
+      # strategy_app/position/fill_feedback.py) silently fell back to the
+      # bare "execution:fills:v1" default -- a stream execution_app_midcpnifty
+      # never publishes to (it publishes to the stream below). Real fills
+      # went unconfirmed, and after FILL_CONFIRM_BARS timeout live positions
+      # were wrongly marked POSITION_CANCELLED / fill_confirm_timeout (this
+      # actually happened to a real MIDCPNIFTY trade). Must exactly match
+      # EXECUTION_FILLS_STREAM in execution_app_midcpnifty's block.
+      EXECUTION_FILLS_STREAM: "execution:midcpnifty:fills:v1"
       # COLD START (2026-09-07): no model trained yet -- this path does not
       # exist. ML_ENTRY logs a one-time warning and produces zero votes until
       # Phase 6 (historical backfill + cold-start train, same playbook as
@@ -3113,6 +3130,14 @@ services:
       TRADE_SIGNAL_TOPIC: "market:finnifty:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:finnifty:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:finnifty:strategy:decision_trace:v1"
+      # 2026-09-25 BUGFIX: was never set here, so FillFeedback (see
+      # strategy_app/position/fill_feedback.py) silently fell back to the
+      # bare "execution:fills:v1" default -- a stream execution_app_finnifty
+      # never publishes to (it publishes to the stream below). Real fills
+      # went unconfirmed, and after FILL_CONFIRM_BARS timeout live positions
+      # were wrongly marked POSITION_CANCELLED / fill_confirm_timeout. Must
+      # exactly match EXECUTION_FILLS_STREAM in execution_app_finnifty's block.
+      EXECUTION_FILLS_STREAM: "execution:finnifty:fills:v1"
       # 2026-08-04: v2 -- retrained after the hist_backfill DTE bug fix (v1's
       # training data carried NIFTY's WEEKLY expiry on every FINNIFTY snapshot;
       # repaired in Mongo from the empirical straddle-collapse calendar, then
@@ -3239,6 +3264,14 @@ services:
       TRADE_SIGNAL_TOPIC: "market:sensex:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:sensex:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:sensex:strategy:decision_trace:v1"
+      # 2026-09-25 BUGFIX: was never set here, so FillFeedback (see
+      # strategy_app/position/fill_feedback.py) silently fell back to the
+      # bare "execution:fills:v1" default -- a stream execution_app_sensex
+      # never publishes to (it publishes to the stream below). Real fills
+      # went unconfirmed, and after FILL_CONFIRM_BARS timeout live positions
+      # were wrongly marked POSITION_CANCELLED / fill_confirm_timeout. Must
+      # exactly match EXECUTION_FILLS_STREAM in execution_app_sensex's block.
+      EXECUTION_FILLS_STREAM: "execution:sensex:fills:v1"
       # Trained 2026-08-10 (v1): cold-start entry model, 47 ENTRY_FEATURES_V3
       # features, 0.15% label / 15min horizon, XGBoost + isotonic calibration.
       # Train 2026-01-01..2026-06-30 (6mo, more data for the underlying fit),
