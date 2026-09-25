@@ -199,9 +199,9 @@
     },
     "option_trading-execution_app_sensex-1": {
       "instrument": "SENSEX",
-      "_comment": "2026-08-10 launch state: paper. First BSE instrument, buyer-side only (user decision). Flip EXECUTION_ADAPTER's expect to 'dhan' in the SAME commit that sets SENSEX_EXECUTION_ADAPTER=dhan in .env.compose once paper-mode decision traces look sane.",
+      "_comment": "2026-09-25: flipped live, real Dhan execution -- SENSEX_EXECUTION_ADAPTER=dhan set in .env.compose the same day, per explicit user go-live decision.",
       "expect": {
-        "EXECUTION_ADAPTER": "paper",
+        "EXECUTION_ADAPTER": "dhan",
         "EXECUTION_REQUIRE_LIVE_TIER": "1",
         "SENSEX_LOT_SIZE": "20"
       },
