@@ -1191,6 +1191,12 @@ services:
       MONGO_COLL_TRADE_SIGNALS_HISTORICAL: "${MONGO_COLL_TRADE_SIGNALS_HISTORICAL:-trade_signals_historical}"
       MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL: "${MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL:-strategy_positions_historical}"
       MONGO_COLL_STRATEGY_EVAL_RUNS: "${MONGO_COLL_STRATEGY_EVAL_RUNS:-strategy_eval_runs}"
+      # 2026-09-25: dashboard read-only visibility into the shared capital
+      # pool -- capital_pool_routes.py reads these directly from its own
+      # env, separate from strategy_app's copy of the same vars.
+      CAPITAL_POOL_ENABLED: "${CAPITAL_POOL_ENABLED:-0}"
+      CAPITAL_POOL_TOTAL_RS: "${CAPITAL_POOL_TOTAL_RS:-400000}"
+      CAPITAL_POOL_MAX_INSTRUMENT_SHARE: "${CAPITAL_POOL_MAX_INSTRUMENT_SHARE:-0.40}"
       STRATEGY_EVAL_COMMAND_TOPIC: "${STRATEGY_EVAL_COMMAND_TOPIC:-strategy:eval:command}"
       STRATEGY_EVAL_GLOBAL_CHANNEL: "${STRATEGY_EVAL_GLOBAL_CHANNEL:-strategy:eval:global}"
       STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
