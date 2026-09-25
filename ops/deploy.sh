@@ -31,8 +31,41 @@ git fetch origin "$BRANCH" || fail "git fetch"
 git merge --ff-only "origin/$BRANCH" || fail "git pull is not fast-forward — resolve VM repo drift first (git status)"
 log "at commit: $(git rev-parse --short HEAD) $(git log -1 --format=%s | head -c 60)"
 
-log "2/5 building images: $SERVICES"
-$COMPOSE build $SERVICES || fail "image build"
+# 2026-09-25: every non-primary instrument's service (execution_app_nifty,
+# strategy_app_sensex, seller_app_finnifty, ...) is declared with `image:`
+# only, no `build:` of its own -- it reuses the image the bare/primary
+# service builds (e.g. seller_app_sensex runs `image: option_trading-
+# seller_app`, built only by the `seller_app` service block). `compose
+# build <suffixed-service>` is therefore a silent no-op for it: no error,
+# exits fast, and step 3 force-recreates the container on whatever image
+# already existed -- which found a real stale-code deploy today when
+# `deploy.sh seller_app_sensex seller_app_finnifty` was run deliberately
+# WITHOUT the bare `seller_app` (to avoid touching BankNifty's halted
+# real-money container), so nothing ever rebuilt the shared image.
+# Fix: always build each requested service's OWN base/primary service too
+# -- building an image never starts or recreates a container, so this is
+# safe even when the base service (BankNifty/primary) must stay untouched;
+# only $SERVICES (unchanged below) is ever passed to `up --force-recreate`.
+base_family_for(){ # suffixed service -> the base service owning its image's build:
+  case "$1" in
+    *_nifty)      echo "${1%_nifty}";;
+    *_finnifty)   echo "${1%_finnifty}";;
+    *_sensex)     echo "${1%_sensex}";;
+    *_midcpnifty) echo "${1%_midcpnifty}";;
+    *)            echo "$1";;
+  esac
+}
+BUILD_SERVICES=""
+for svc in $SERVICES; do
+  case " $BUILD_SERVICES " in *" $svc "*) ;; *) BUILD_SERVICES="$BUILD_SERVICES $svc";; esac
+  base=$(base_family_for "$svc")
+  if [ "$base" != "$svc" ]; then
+    case " $BUILD_SERVICES " in *" $base "*) ;; *) BUILD_SERVICES="$BUILD_SERVICES $base";; esac
+  fi
+done
+
+log "2/5 building images: $BUILD_SERVICES"
+$COMPOSE build $BUILD_SERVICES || fail "image build"
 
 log "3/5 recreating containers"
 $COMPOSE up -d --no-deps --force-recreate $SERVICES || fail "compose up"
