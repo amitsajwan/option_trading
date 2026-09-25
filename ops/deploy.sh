@@ -27,9 +27,24 @@ fail(){ log "FAILED: $*"; exit 1; }
 cd "$REPO" || fail "repo missing"
 
 log "1/5 git pull --ff-only origin $BRANCH"
+BEFORE_REV=$(git rev-parse HEAD)
 git fetch origin "$BRANCH" || fail "git fetch"
 git merge --ff-only "origin/$BRANCH" || fail "git pull is not fast-forward — resolve VM repo drift first (git status)"
 log "at commit: $(git rev-parse --short HEAD) $(git log -1 --format=%s | head -c 60)"
+
+# 2026-09-25: the line above just git-pulled THIS FILE. A running bash
+# process's behavior when its own script changes on disk mid-execution is
+# undefined, and it bit a real deploy today: a pull that changed deploy.sh
+# itself (adding the base-image build-set fix below) silently kept running
+# the OLD build logic for the rest of that same invocation -- proven by
+# re-running immediately after with nothing left to pull (a no-op pull),
+# which then correctly showed the new logic. Re-exec into a fresh
+# interpreter of whatever is now actually on disk so every step after this
+# one is guaranteed current, never whatever bash had already buffered.
+if [ "$(git rev-parse HEAD)" != "$BEFORE_REV" ] && [ -z "${DEPLOY_REEXECED:-}" ]; then
+  export DEPLOY_REEXECED=1
+  exec bash "$0" "$@"
+fi
 
 # 2026-09-25: every non-primary instrument's service (execution_app_nifty,
 # strategy_app_sensex, seller_app_finnifty, ...) is declared with `image:`
