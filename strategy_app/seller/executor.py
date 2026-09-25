@@ -53,6 +53,13 @@ class OpenSpread:
     # had ALREADY closed successfully in a prior attempt, opening a real unintended
     # position every retry. Found 2026-07-22.
     closed_legs: dict = field(default_factory=dict)
+    # Last leg-execution error from a failed close attempt (2026-09-25: a NIFTY
+    # spread retried a failing close every 30s for 10 straight days with only
+    # a generic "close_failed" reason ever recorded -- the actual broker/resolve
+    # error was logged to container stdout only, which doesn't survive restarts
+    # or log rotation, making the incident undiagnosable after the fact). Set by
+    # close_spread() on any leg failure so the caller can persist it durably.
+    last_close_error: Optional[str] = None
 
     @property
     def max_risk(self) -> float:
@@ -133,6 +140,7 @@ class SafeExecutor:
             if not f.filled:
                 logger.error("seller close: buy-back %s%d FAILED (%s) — position still risk-capped, retry needed",
                              fl.option_type, fl.strike, f.error)
+                spread.last_close_error = f"buyback {fl.option_type}{fl.strike}@{expiry}: {f.error}"
                 return None
             spread.closed_legs[key] = f.price
         for fl in longs:                       # then sell the long hedges
@@ -148,6 +156,7 @@ class SafeExecutor:
                 # already recorded in closed_legs so they won't be re-submitted.
                 logger.error("seller close: hedge sell %s%d FAILED (%s) — leg still open, retry needed",
                              fl.option_type, fl.strike, f.error)
+                spread.last_close_error = f"hedge_sell {fl.option_type}{fl.strike}@{expiry}: {f.error}"
                 return None
             spread.closed_legs[key] = f.price
         exit_prices: dict[tuple[str, int], float] = {

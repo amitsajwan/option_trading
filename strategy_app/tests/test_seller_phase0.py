@@ -90,6 +90,47 @@ def test_latch_resets_on_new_day(runner):
     assert runner._entry_fail_count == 0
 
 
+def test_operator_halt_blocks_new_entries(runner):
+    """2026-09-25: the seller previously had no soft-halt at all -- the only
+    way to stop it was killing the container. Now mirrors the buyer's
+    operator_halt exactly (same file, same resolve_runtime_artifact_paths()
+    helper). Entry-only: must never touch the gateway once halted."""
+    _FailingGateway.calls = 0
+    runner._halt_path.parent.mkdir(parents=True, exist_ok=True)
+    runner._halt_path.touch()
+    for _ in range(3):
+        runner.on_snapshot(_snap())
+    assert _FailingGateway.calls == 0, "halted seller must never attempt an entry"
+    assert runner._entry_fail_count == 0, "halt must short-circuit before the entry-fail-latch logic runs"
+
+
+def test_operator_halt_does_not_block_managing_existing_spreads(runner):
+    """Halting new risk must never mean abandoning risk already on -- an open
+    spread must still be actively managed/closeable while halted, exactly
+    like the buyer's operator_halt never blocks exits."""
+    from strategy_app.seller.executor import FilledLeg, OpenSpread
+    from strategy_app.seller.gateway import Fill
+
+    class _AlwaysFillGateway:
+        def execute(self, action, option_type, strike, expiry, qty):
+            return Fill(True, 10.0, order_id="x")
+
+    runner._gw_factory = lambda pf: _AlwaysFillGateway()
+    runner._halt_path.parent.mkdir(parents=True, exist_ok=True)
+    runner._halt_path.touch()
+    stale = OpenSpread(
+        spread_id="held1", structure="iron_condor", expiry="2026-08-25", qty=30,
+        legs=[FilledLeg("SELL", "CE", 99000, 30, 100.0),
+              FilledLeg("BUY", "CE", 99300, 30, 50.0)],
+        entry_credit=50.0, width=600, opened_at="2026-06-20T05:00:00+00:00",
+        trade_date="2026-06-20",
+    )
+    runner._mgr.add(stale)
+    runner.on_snapshot(_snap(day="2026-07-10"))  # held 20d >> MAX_HOLD -> should still close
+    assert all(s.spread_id != "held1" for s in runner._mgr.open_spreads), \
+        "existing spread must still be managed/closed while operator_halt is set"
+
+
 def test_trade_card_contains_max_loss_and_sense(runner):
     legs = [SpreadLeg("SELL", "CE", 57400, "short"), SpreadLeg("BUY", "CE", 57700, "long"),
             SpreadLeg("SELL", "PE", 57000, "short"), SpreadLeg("BUY", "PE", 56700, "long")]

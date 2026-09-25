@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from ..market.snapshot_accessor import SnapshotAccessor
+from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
 from .brain import SellerBrain
 from .chain_utils import build_price_fn  # chain-shift-aware price lookup (permanent fix)
 from .executor import SafeExecutor, OpenSpread
@@ -72,6 +73,14 @@ class SellerRunner:
         # time exits don't depend on marks).
         self._stop_confirm_bars = int(os.getenv("SELLER_STOP_CONFIRM_BARS", "2") or 2)
         self._stop_streak: dict[str, int] = {}
+        # 2026-09-25: alert once a spread's close has failed this many consecutive
+        # attempts, instead of retrying silently forever (see _note_close_failure).
+        self._close_fail_alert_threshold = int(os.getenv("SELLER_CLOSE_FAIL_ALERT_AFTER", "10") or 10)
+        self._close_fail_streak: dict[str, int] = {}
+        # 2026-09-25: soft-halt, mirroring the buyer's operator_halt exactly --
+        # same file name, same helper, resolved from this seller's own
+        # STRATEGY_RUN_DIR (already set to /seller_run per-instrument).
+        self._halt_path = resolve_runtime_artifact_paths().operator_halt_path
         # Quiet-gate (Phase 2 / spec 2026-07-11): skip condor ENTRIES when the
         # movement model says a big move is likely — "IV is rich BECAUSE a move
         # is coming" is exactly when selling loses (Apr-2025 stop cluster).
@@ -121,6 +130,7 @@ class SellerRunner:
                 "entered_today": self._entered_today,
                 "entry_fail_count": self._entry_fail_count,
                 "entry_latched": self._entry_fail_count >= self._entry_fail_latch,
+                "operator_halted": self._halt_path.exists(),
                 "daily_pnl_rs": round(self._daily_pnl),
                 "spreads": spreads,
             }}, upsert=True)
@@ -222,6 +232,46 @@ class SellerRunner:
         except Exception:
             pass
         return None
+
+    def _close_expiry(self, sp, fallback: Optional[date]) -> Optional[date]:
+        """The expiry to use when CLOSING sp — must be the spread's OWN expiry,
+        never the snapshot's rolling front-month one. 2026-09-25 root cause: both
+        close call sites passed the per-cycle `expiry` (from self._expiry(snap),
+        which rolls to the NEXT week's contract once the current one lapses) into
+        close_spread() instead of sp.expiry. The instant real time crossed a
+        position's actual expiry, every retry tried to resolve its strikes against
+        a contract from the WRONG week -- a combination that can never exist -- so
+        the close failed identically forever with no possibility of self-recovery.
+        One NIFTY spread retried this way every 30s for 10 straight days
+        (30,252 consecutive failures) before this was found. Mirrors the DTE-only
+        fix already applied a few lines up (see the 2026-07-10 comment on dte_own)
+        -- that fix covered the decision of WHEN to close; this covers the
+        execution of the close itself, which the original fix missed."""
+        try:
+            return date.fromisoformat(str(sp.expiry)[:10])
+        except Exception:
+            logger.error("seller close: sp.expiry unparseable (%r) for pos=%s -- falling back to "
+                         "rolling snapshot expiry, which may not match this spread's real contract",
+                         sp.expiry, sp.spread_id)
+            return fallback
+
+    def _note_close_failure(self, sp, event: str, reason: Optional[str] = None) -> None:
+        """Track consecutive close failures per spread and alert once a streak
+        crosses a threshold -- 2026-09-25: the prior code only logged a generic
+        "close_failed"/"tripwire_close_failed" JSONL line with no failure detail
+        and never escalated, so a spread stuck retrying forever (see
+        _close_expiry's docstring) produced no alert across 10 days and 30,252
+        failed attempts. Escalates once per spread (not every tick past the
+        threshold) to avoid alert spam on a position that's already flagged."""
+        count = self._close_fail_streak.get(sp.spread_id, 0) + 1
+        self._close_fail_streak[sp.spread_id] = count
+        if count == self._close_fail_alert_threshold:
+            self._alert(
+                f"<b>SELLER CLOSE STUCK</b> {sp.structure} {sp.spread_id} has failed to close "
+                f"{count} consecutive attempts ({event}, reason={reason or '?'}). "
+                f"Last error: {sp.last_close_error or 'unknown'}. Investigate manually — "
+                f"this will keep retrying silently otherwise."
+            )
 
     # ── Phase 0 helpers (2026-07-10) ─────────────────────────────────────────
     def _adapter(self, pf):
@@ -385,10 +435,13 @@ class SellerRunner:
             if self._trip_streak >= 2:
                 for sp in list(self._mgr.open_spreads):
                     ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
-                    exit_val = ex.close_spread(sp, expiry)
+                    exit_val = ex.close_spread(sp, self._close_expiry(sp, expiry))
                     if exit_val is None:
-                        self._log("tripwire_close_failed", spread_id=sp.spread_id)
+                        self._log("tripwire_close_failed", spread_id=sp.spread_id,
+                                  error=sp.last_close_error)
+                        self._note_close_failure(sp, "tripwire_close_failed")
                         continue
+                    self._close_fail_streak.pop(sp.spread_id, None)
                     held = 0
                     try:
                         held = (date.fromisoformat(day or self._cur_day)
@@ -447,7 +500,7 @@ class SellerRunner:
                 self._stop_streak.pop(sp.spread_id, None)
             if reason:
                 ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
-                exit_val = ex.close_spread(sp, expiry)
+                exit_val = ex.close_spread(sp, self._close_expiry(sp, expiry))
                 if exit_val is None:
                     # A leg failed to square off. KEEP the spread in the durable store and retry
                     # next tick — NEVER drop a still-live position from tracking. (review C1)
@@ -456,8 +509,11 @@ class SellerRunner:
                     # here, a restart before the next successful attempt would lose that
                     # progress and re-submit an already-closed leg's buy-back order.
                     self._mgr.persist()
-                    self._log("close_failed", spread_id=sp.spread_id, reason=reason)
+                    self._log("close_failed", spread_id=sp.spread_id, reason=reason,
+                              error=sp.last_close_error)
+                    self._note_close_failure(sp, "close_failed", reason)
                     continue
+                self._close_fail_streak.pop(sp.spread_id, None)
                 pnl = (sp.entry_credit - exit_val) * sp.qty
                 self._daily_pnl += pnl
                 self._log("close", spread_id=sp.spread_id, structure=sp.structure, reason=reason,
@@ -468,6 +524,17 @@ class SellerRunner:
                 sign = "+" if pnl >= 0 else ""
                 self._alert(f"<b>SELLER CLOSE {sp.structure}</b>  {sign}₹{pnl:.0f}  [{reason}]  held={held}d")
         # ── entry: once/day, in window, risk-permitting ──
+        if self._halt_path.exists():
+            # 2026-09-25: the seller previously had NO soft-halt at all -- the only
+            # way to stop it was killing the container (docs/EMERGENCY_STOP.md).
+            # Mirrors the buyer's operator_halt exactly (same file, same
+            # resolve_runtime_artifact_paths() helper, same STRATEGY_RUN_DIR the
+            # seller already sets to /seller_run) -- an operator can now halt new
+            # entries without touching the container. Entry-only, same as the
+            # buyer: existing spreads are still managed/closed above regardless
+            # of halt state, since halting new risk should never mean abandoning
+            # risk already on.
+            return
         if self._entered_today:
             return
         if self._entry_fail_count >= self._entry_fail_latch:

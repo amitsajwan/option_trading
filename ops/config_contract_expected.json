@@ -24,7 +24,8 @@
         "DHAN_CLIENT_ID",
         "DHAN_ACCESS_TOKEN",
         "SELLER_IV_RANK_MIN",
-        "SELLER_CONDOR_OFFSET"
+        "SELLER_CONDOR_OFFSET",
+        "SELLER_QUIET_GATE_BUNDLE"
       ]
     },
     "option_trading-seller_app_nifty-1": {
