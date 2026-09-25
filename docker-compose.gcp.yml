@@ -329,6 +329,12 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      # 2026-09-25: strategy_app never talked to Mongo directly before (writes
+      # go via Redis to persistence_app) -- added for contracts_app/capital_pool.py,
+      # the first thing in this container to need a direct connection.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_RUN_DIR: "/app/.run/strategy_app"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
       MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
@@ -2779,6 +2785,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      # 2026-09-25: see strategy_app's base block for why this is new.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: NIFTY
       STRATEGY_RUN_DIR: "/app/.run/strategy_app_nifty"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
@@ -2928,6 +2938,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      # 2026-09-25: see strategy_app's base block for why this is new.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: MIDCPNIFTY
       STRATEGY_RUN_DIR: "/app/.run/strategy_app_midcpnifty"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
@@ -3043,6 +3057,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      # 2026-09-25: see strategy_app's base block for why this is new.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: FINNIFTY
       STRATEGY_RUN_DIR: "/app/.run/strategy_app_finnifty"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
@@ -3161,6 +3179,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      # 2026-09-25: see strategy_app's base block for why this is new.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: SENSEX
       STRATEGY_RUN_DIR: "/app/.run/strategy_app_sensex"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
