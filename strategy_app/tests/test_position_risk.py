@@ -111,6 +111,41 @@ class PositionRiskTests(unittest.TestCase):
         self.assertIsNotNone(exit_signal)
         self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
 
+    def test_exit_signal_carries_full_position_lots(self) -> None:
+        """Real-money incident, 2026-09-25: the exit TradeSignal never set
+        max_lots, so it silently defaulted to 1 -- execution_app reads
+        max_lots to size the real SELL order, so a 2-lot MIDCPNIFTY position's
+        stop-loss exit only closed 1 lot, leaving the other open and
+        unmanaged (the tracker had already logged POSITION_CLOSE for the
+        full position). The exit signal must carry the position's actual
+        lot count, not the dataclass default."""
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-multi-lot",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="CE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.10,
+            target_pct=0.50,
+            max_lots=3,
+        )
+        tracker.open_position(signal, _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0))
+        self.assertEqual(tracker.current_position.lots, 3)
+
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-stop", ts="2026-02-28T09:35:00+05:30", ce_price=89.0),
+            RiskContext(),
+        )
+
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
+        self.assertEqual(exit_signal.max_lots, 3)
+
     def test_position_without_max_hold_bars_keeps_running(self) -> None:
         tracker = PositionTracker()
         tracker.on_session_start(date(2026, 2, 28))

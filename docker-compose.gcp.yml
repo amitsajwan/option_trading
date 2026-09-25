@@ -1671,6 +1671,13 @@ services:
     environment:
       # --- SIM=LIVE parity: mirrored from strategy_app env (added 2026-06-21) ---
       TZ: "Asia/Kolkata"
+      # 2026-09-25: strategy_app gained these for contracts_app/capital_pool.py
+      # (see its base block) -- mirrored here so test_sim_live_parity.py's
+      # SIM==LIVE guard doesn't flag the drift. SIM bypasses the pool itself
+      # via its run_id prefix, but the connection target must still match.
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
       STRATEGY_ML_PURE_BYPASS_GATES: "${STRATEGY_ML_PURE_BYPASS_GATES:-0}"
       STRATEGY_ML_PURE_RANDOMIZE_DIRECTION: "${STRATEGY_ML_PURE_RANDOMIZE_DIRECTION:-0}"

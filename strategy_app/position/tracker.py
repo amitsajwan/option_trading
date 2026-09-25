@@ -480,6 +480,14 @@ class PositionTracker:
             entry_premium=position.entry_premium,
             exit_premium=exit_premium,
             position_id=position.position_id,
+            # 2026-09-25: TradeSignal.max_lots defaults to 1 and this exit
+            # signal never set it, so execution_app's _dict_to_position_stub()
+            # (which reads max_lots to size the SELL) always requested 1 lot
+            # regardless of the real position size -- a live MIDCPNIFTY exit
+            # for 2 lots only closed 1, leaving the other lot open and
+            # unmanaged (our tracker had already logged POSITION_CLOSE).
+            # Real-money incident, found 2026-09-25.
+            max_lots=position.lots,
             exit_reason=reason,
             reason=(
                 f"{reason.value} pnl={position.pnl_pct:.2%} mfe={position.mfe_pct:.2%} "
