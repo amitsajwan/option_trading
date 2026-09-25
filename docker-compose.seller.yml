@@ -153,7 +153,16 @@ services:
       MONGO_DB: trading_ai
       STRATEGY_INSTRUMENT: FINNIFTY
       STRATEGY_RUN_DIR: /seller_run
-      EXECUTION_ADAPTER: "${FINNIFTY_EXECUTION_ADAPTER:-paper}"
+      # 2026-09-25: own var, not FINNIFTY_EXECUTION_ADAPTER -- that's the BUYER's
+      # var (docker-compose.gcp.yml execution_app_finnifty). Found this exact
+      # coupling live on SENSEX today: flipping the SENSEX buyer to real Dhan
+      # execution (a deliberate, correct go-live decision) silently flipped the
+      # SENSEX seller's adapter too, since both read SENSEX_EXECUTION_ADAPTER --
+      # caught only by SELLER_LIVE_ENABLED=0 as an independent gate, not by
+      # design. NIFTY/BankNifty already avoid this by accident of their seller
+      # blocks using a differently-named var than their buyers; FINNIFTY,
+      # MIDCPNIFTY and SENSEX did not. Fixing all three the same way.
+      EXECUTION_ADAPTER: "${FINNIFTY_SELLER_EXECUTION_ADAPTER:-paper}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
@@ -201,7 +210,10 @@ services:
       MONGO_DB: trading_ai
       STRATEGY_INSTRUMENT: MIDCPNIFTY
       STRATEGY_RUN_DIR: /seller_run
-      EXECUTION_ADAPTER: "${MIDCPNIFTY_EXECUTION_ADAPTER:-paper}"
+      # 2026-09-25: own var, not MIDCPNIFTY_EXECUTION_ADAPTER (the buyer's var,
+      # docker-compose.gcp.yml execution_app_midcpnifty) -- see FINNIFTY's block
+      # above for why this coupling is real, not hypothetical.
+      EXECUTION_ADAPTER: "${MIDCPNIFTY_SELLER_EXECUTION_ADAPTER:-paper}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
@@ -251,7 +263,15 @@ services:
       MONGO_DB: trading_ai
       STRATEGY_INSTRUMENT: SENSEX
       STRATEGY_RUN_DIR: /seller_run
-      EXECUTION_ADAPTER: "${SENSEX_EXECUTION_ADAPTER:-paper}"
+      # 2026-09-25: own var, not SENSEX_EXECUTION_ADAPTER -- that's the SENSEX
+      # BUYER's var (docker-compose.gcp.yml execution_app_sensex), flipped to
+      # "dhan" today for a deliberate, correct buyer go-live decision. Because
+      # this seller block read the same shared var, that change silently put
+      # this (still-supposed-to-be-paper) seller's EXECUTION_ADAPTER on "dhan"
+      # too -- caught by the config contract, not by design, and inert only
+      # because SELLER_LIVE_ENABLED=0 is a genuinely independent gate. See
+      # FINNIFTY's block above for the full explanation; fixed the same way.
+      EXECUTION_ADAPTER: "${SENSEX_SELLER_EXECUTION_ADAPTER:-paper}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
