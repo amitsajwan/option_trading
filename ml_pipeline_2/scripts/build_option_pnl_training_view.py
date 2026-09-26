@@ -20,10 +20,14 @@ Usage:
         --output .run/training_view/training_view_nifty_option_pnl.csv.gz
 
 Run the strike-coverage QA (logged automatically, see the "strike coverage"
-log line) BEFORE trusting the output -- a missing_quote_rate above 30% or a
-payoff_positive_rate outside 5-60% means the label isn't trustworthy yet
-(see ml_pipeline_2/docs/training/OPTION_LABEL_CONTRACT.md's sanity-gate
-discipline, which these thresholds are taken from verbatim).
+log line) BEFORE trusting the output -- a missing_quote_rate above 30% means
+the option chain data is too gappy to trust (threshold taken verbatim from
+ml_pipeline_2/docs/training/OPTION_LABEL_CONTRACT.md's sanity-gate
+discipline). The positive-rate gate is NOT taken from that contract (it was
+calibrated for a single-leg recipe, not this max(CE,PE) oracle-style label
+-- see option_payoff_labels.StrikeCoverageReport's docstring for why a high
+positive rate here is expected, not a bug) -- only implausible extremes
+(<2% or >98%) are flagged.
 """
 from __future__ import annotations
 
@@ -135,12 +139,14 @@ def build_payoff_label_frame(
     coverage = measure_strike_coverage(all_labels)
     log.info(
         "strike coverage over %d days (%d had data): %d/%d bars had a resolvable ATM strike, "
-        "missing_quote_rate=%.3f (gate: <=0.30 %s), payoff_positive_rate=%.3f (gate: 0.05-0.60 %s)",
+        "missing_quote_rate=%.3f (gate: <=0.30 %s), payoff_positive_rate=%.3f (gate: 0.02-0.98 %s), "
+        "payoff distribution: mean=%s median=%s p10=%s p90=%s",
         len(trade_dates), days_found,
         coverage.bars_with_atm_strike, coverage.total_entry_bars, coverage.missing_quote_rate,
         "PASS" if coverage.passes_missing_quote_gate else "FAIL",
         coverage.payoff_positive_rate,
         "PASS" if coverage.passes_positive_rate_gate else "FAIL",
+        coverage.payoff_mean, coverage.payoff_median, coverage.payoff_p10, coverage.payoff_p90,
     )
     if not coverage.passes_missing_quote_gate:
         log.warning(
@@ -150,20 +156,38 @@ def build_payoff_label_frame(
         )
     if not coverage.passes_positive_rate_gate:
         log.warning(
-            "payoff_positive_rate gate FAILED (%.3f outside 0.05-0.60) -- either too rare to "
-            "learn or trivially common/leaky. Do not train on this output without investigating.",
+            "payoff_positive_rate gate FAILED (%.3f outside the 0.02-0.98 implausible-extreme "
+            "band) -- near-zero means nothing pays even with perfect hindsight (label or cost "
+            "model likely broken); near-total means implausible even for an oracle (check cost "
+            "isn't being computed as ~zero, or premiums aren't on the wrong scale). Do not train "
+            "on this output without investigating.",
         )
     return pd.DataFrame(rows)
 
 
 def _normalized_join_key(df: pd.DataFrame) -> pd.Series:
-    """Both sides of the join may carry `timestamp` in slightly different
-    string representations (the training-view CSV preserves whatever Mongo
-    gave it; this script emits SnapshotAccessor's own raw payload string) --
-    compare by parsed, UTC-normalized datetime rather than raw string
-    equality, so a formatting difference doesn't silently produce a
-    zero-row join."""
-    return pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    """The two sides of this join carry time in genuinely different shapes,
+    not just different string formats:
+      - This script's own label frame emits a full ISO `timestamp` string
+        with a UTC offset (SnapshotAccessor's raw payload field).
+      - The real training-view CSV (build_training_view_from_mongo.py's
+        actual current output, confirmed 2026-09-26 against
+        training_view_nifty.csv.gz) has NO `timestamp` column at all -- it
+        carries `trade_date` ("2024-11-04") and a separate `time`
+        ("09:15:00", IST local wall-clock, no offset) instead.
+    Normalize both to a UTC-aware datetime so the join works regardless of
+    which shape a given training-view CSV uses.
+    """
+    if "timestamp" in df.columns:
+        return pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    if "time" in df.columns and "trade_date" in df.columns:
+        combined = df["trade_date"].astype(str) + " " + df["time"].astype(str)
+        naive = pd.to_datetime(combined, errors="coerce")
+        return naive.dt.tz_localize("Asia/Kolkata", ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
+    raise ValueError(
+        "expected either a 'timestamp' column or both 'trade_date' and 'time' columns "
+        f"to build a join key -- got columns: {list(df.columns)}"
+    )
 
 
 def join_features_to_labels(feature_df: pd.DataFrame, label_df: pd.DataFrame) -> pd.DataFrame:

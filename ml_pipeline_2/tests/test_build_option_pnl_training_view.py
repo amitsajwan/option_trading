@@ -115,6 +115,34 @@ class TestJoinFeaturesToLabels:
         assert set(merged["payoff_score"]) == {0.05, -0.02}
         assert "some_feature" in merged.columns
 
+    def test_joins_real_schema_trade_date_plus_time_against_label_frames_timestamp(self) -> None:
+        # 2026-09-26: the ACTUAL training_view_nifty.csv.gz has no `timestamp`
+        # column at all -- separate `trade_date` ("2024-11-04") + `time`
+        # ("09:15:00", IST local, no offset) instead. This is the schema
+        # that crashed the real VM run with KeyError('timestamp') before
+        # this was fixed.
+        feature_df = pd.DataFrame({
+            "trade_date": ["2026-01-05", "2026-01-05"],
+            "time": ["09:45:00", "09:46:00"],  # IST local, matches 04:15/04:16 UTC
+            "some_feature": [1.0, 2.0],
+        })
+        label_df = pd.DataFrame({
+            "trade_date": ["2026-01-05", "2026-01-05"],
+            "timestamp": ["2026-01-05T04:15:00+00:00", "2026-01-05T04:16:00+00:00"],
+            "payoff_score": [0.05, -0.02],
+            "payoff_winning_side": ["CE", "PE"],
+            "payoff_strike": [24500, 24500],
+        })
+        merged = join_features_to_labels(feature_df, label_df)
+        assert len(merged) == 2
+        assert set(merged["payoff_score"]) == {0.05, -0.02}
+        assert "some_feature" in merged.columns
+
+    def test_missing_both_timestamp_and_time_trade_date_raises_clearly(self) -> None:
+        feature_df = pd.DataFrame({"some_feature": [1.0]})
+        with pytest.raises(ValueError, match="timestamp"):
+            join_features_to_labels(feature_df, feature_df)
+
     def test_rows_with_no_matching_label_are_dropped(self) -> None:
         feature_df = pd.DataFrame({
             "trade_date": ["2026-01-05", "2026-01-05"],
