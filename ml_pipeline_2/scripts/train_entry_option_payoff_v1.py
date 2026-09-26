@@ -70,6 +70,29 @@ SHIP_GATE_SPEARMAN_P_MAX = 0.05           # must be statistically distinguishabl
 SHIP_GATE_MIN_HOLDOUT_ROWS = 200          # decile analysis on fewer than this is not trustworthy (20/decile)
 
 
+def winsorize_target(y: np.ndarray, *, lower_pct: float = 0.01, upper_pct: float = 0.99) -> tuple[np.ndarray, float, float]:
+    """Clip extreme tail values in the TRAINING target to the
+    [lower_pct, upper_pct] percentile range before fitting a
+    squared-error regressor.
+
+    Real 2026-09-26 run against full NIFTY history: payoff_score ranges
+    from -1.11 to +11.80 (a handful of near-expiry, near-floor-premium
+    entries where a small fixed brokerage fee is a huge percentage of a
+    tiny entry value, or a rare large tail move), while the bulk of the
+    distribution sits in a much tighter band (25th/50th/75th percentiles
+    0.011/0.050/0.123). A squared-error loss weights a +1180% row 10,000x
+    more than a +5% row -- a handful of these can dominate the whole fit
+    and pull every prediction toward chasing rare tail rows instead of
+    learning the much more common, more decision-relevant mid-range
+    signal. Only ever apply this to the TRAINING target -- validation and
+    holdout targets must stay real/unclipped so reported ship-gate numbers
+    reflect actual, un-doctored economics.
+    """
+    lo = float(np.quantile(y, lower_pct))
+    hi = float(np.quantile(y, upper_pct))
+    return np.clip(y, lo, hi), lo, hi
+
+
 def load_training_view(path: str, *, start: str, end: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     if TARGET_COL not in df.columns:
@@ -226,6 +249,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--holdout-end", default="2026-07-31")
     ap.add_argument("--n-trials", type=int, default=60)
     ap.add_argument("--features", default="", help="Comma-separated feature override (empty=ENTRY_FEATURES_V3)")
+    ap.add_argument("--winsorize-lower-pct", type=float, default=0.01)
+    ap.add_argument("--winsorize-upper-pct", type=float, default=0.99)
+    ap.add_argument("--no-winsorize", action="store_true", help="Train on the raw, unclipped target (not recommended)")
     args = ap.parse_args(argv)
 
     features = [f.strip() for f in args.features.split(",") if f.strip()] or list(ENTRY_FEATURES_V3)
@@ -247,6 +273,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     y_valid = pd.to_numeric(valid_df[TARGET_COL], errors="coerce").to_numpy()
     X_hold = _select_features(holdout_df, features)
     y_hold = pd.to_numeric(holdout_df[TARGET_COL], errors="coerce").to_numpy()
+
+    winsorize_bounds: Optional[tuple[float, float]] = None
+    if not args.no_winsorize:
+        raw_min, raw_max = float(np.min(y_train)), float(np.max(y_train))
+        y_train, wlo, whi = winsorize_target(
+            y_train, lower_pct=args.winsorize_lower_pct, upper_pct=args.winsorize_upper_pct,
+        )
+        n_clipped = int(np.sum((y_train == wlo) | (y_train == whi)) if wlo != whi else 0)
+        log.info(
+            "winsorized training target to [%.4f, %.4f] (raw range was [%.4f, %.4f], ~%d/%d rows clipped)",
+            wlo, whi, raw_min, raw_max, n_clipped, len(y_train),
+        )
+        winsorize_bounds = (wlo, whi)
 
     # Feature medians from TRAIN only, for self-documented NaN-fill at inference
     # (same discipline as train_entry_dhan_v3 -- never NaN-pass-through to the model).
@@ -290,6 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "holdout_start": args.holdout_start, "holdout_end": args.holdout_end,
             "trained_at": datetime.now(timezone.utc).isoformat(),
             "training_view_csv": args.training_view_csv,
+            "winsorize_bounds": winsorize_bounds,
         },
     }
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

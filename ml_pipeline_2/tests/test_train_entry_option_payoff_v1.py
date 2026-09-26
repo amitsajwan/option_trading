@@ -14,7 +14,35 @@ from ml_pipeline_2.scripts.train_entry_option_payoff_v1 import (
     compute_ship_gates,
     decile_lift_table,
     load_training_view,
+    winsorize_target,
 )
+
+
+class TestWinsorizeTarget:
+    def test_clips_extreme_tail_values(self) -> None:
+        # Real 2026-09-26 shape: a tight bulk distribution plus a few wild
+        # tail outliers (e.g. a near-worthless cheap entry blown out by
+        # flat brokerage, or a rare huge tail move).
+        y = np.array([0.01, 0.02, 0.03, 0.05, 0.04, 0.02, 0.01, -0.01, 11.8, -1.1])
+        clipped, lo, hi = winsorize_target(y, lower_pct=0.1, upper_pct=0.9)
+        assert clipped.max() < 11.8
+        assert clipped.min() > -1.1
+        assert lo < hi
+
+    def test_full_0_to_1_percentile_range_clips_nothing(self) -> None:
+        y = np.array([0.01, 0.02, 0.03, 0.04, 100.0])
+        clipped, lo, hi = winsorize_target(y, lower_pct=0.0, upper_pct=1.0)
+        np.testing.assert_allclose(clipped, y)
+
+    def test_never_touches_a_second_array_passed_separately(self) -> None:
+        # Simulates the real usage: winsorize the TRAINING target only,
+        # never validation/holdout -- this test just confirms the function
+        # itself doesn't mutate its input in place, which would be an easy
+        # way to accidentally leak the clip into a caller's other arrays.
+        y_train = np.array([0.01, 0.02, 100.0])
+        y_valid = np.array([0.01, 0.02, 100.0]).copy()
+        winsorize_target(y_train, lower_pct=0.1, upper_pct=0.9)
+        np.testing.assert_array_equal(y_valid, np.array([0.01, 0.02, 100.0]))
 
 
 class TestDecileLiftTable:
