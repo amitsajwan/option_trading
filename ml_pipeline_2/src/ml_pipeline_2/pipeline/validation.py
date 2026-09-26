@@ -27,6 +27,20 @@ session, not as speculative hardening:
   worth double-checking, not because anything failed loudly. See
   project_backtest_wrong_instrument_parquet_2026-09-09.md.
 
+- `check_repricing_wall`: this project has independently found, three
+  separate times (a direction-free ATM straddle, a direction-aware debit
+  vertical, and a straight-and-faded vertical on a separately retrained
+  model -- see `docs/archive/entry_model/MODEL_REBUILD_SPEC_2026-07-11.md`
+  Amendment 3/4 and `docs/archive/entry_model/ENTRY_MODEL_RARELABEL_REBUILD_2026-07-12.md`),
+  that buying options AT THE MOMENT a movement/entry model becomes
+  confident loses money at every horizon -- "the chain is already
+  repriced for the move" by the time detection is confident enough to
+  fire. All three prior tests found this out the expensive way, by
+  applying a trade unconditionally to every fire and watching it lose. This
+  check makes the same test a mandatory, cheap, pre-registered gate: does a
+  candidate's apparent edge survive a 1-2 bar delayed entry, or does it
+  evaporate/invert exactly like those three prior candidates did.
+
 These are meant to run automatically as part of `train` and `backtest`
 pipeline nodes and FAIL LOUD (raise) rather than print a warning someone
 can miss -- the whole point is not depending on a human remembering to
@@ -36,7 +50,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 
 DateLike = Union[str, date, datetime]
 
@@ -57,6 +71,16 @@ class ModelDegenerate(ValueError):
 class ParquetInstrumentMismatch(RuntimeError):
     """Raised when a backtest's parquet_base contains a different
     instrument's snapshot data than the one being backtested."""
+
+
+class RepricingWallFailure(ValueError):
+    """Raised when a candidate's apparent edge at fire-time collapses or
+    inverts once entry is delayed 1-2 bars -- the exact failure mode that
+    sank three independent prior straddle/vertical experiments (see module
+    docstring). A candidate that only "works" at the instant of maximum
+    model confidence, and not a bar or two later, is very likely measuring
+    the option chain's own repricing of the same signal, not a tradeable
+    edge."""
 
 
 def _to_date(value: DateLike) -> date:
@@ -268,4 +292,118 @@ def validate_parquet_instrument(
     )
     if not ok and raise_on_fail:
         raise ParquetInstrumentMismatch(reason)
+    return result
+
+
+@dataclass(frozen=True)
+class RepricingWallReport:
+    ok: bool
+    n_paired_bars: int
+    mean_payoff_at_fire: Optional[float] = None
+    mean_payoff_delay_1: Optional[float] = None
+    mean_payoff_delay_2: Optional[float] = None
+    wilcoxon_p_delay_1: Optional[float] = None
+    wilcoxon_p_delay_2: Optional[float] = None
+    reason: str = ""
+
+
+def check_repricing_wall(
+    *,
+    payoff_at_fire: Sequence[Optional[float]],
+    payoff_delay_1: Sequence[Optional[float]],
+    payoff_delay_2: Sequence[Optional[float]],
+    min_paired_bars: int = 20,
+    raise_on_fail: bool = True,
+) -> RepricingWallReport:
+    """Re-score a candidate's fired bars using entry premiums sampled 1 and
+    2 bars AFTER the fire instead of at the fire itself (hold-to-exit
+    horizon shortened correspondingly by the caller when building these
+    sequences -- this function only compares the three already-computed
+    payoff distributions, it does not do the re-scoring itself).
+
+    The three sequences must be the SAME fired bars, pairwise aligned by
+    index (e.g. `payoff_at_fire[i]`, `payoff_delay_1[i]`, `payoff_delay_2[i]`
+    all describe the i-th fire). Only bars where all three are non-None are
+    used -- entries are dropped, never imputed, matching every other label
+    in this pipeline.
+
+    Fails when the mean payoff at fire-time is positive (there's an
+    apparent edge worth testing) but either delayed mean is <= 0 (the edge
+    collapsed to break-even-or-worse, or inverted). A candidate with no
+    positive edge at fire-time in the first place isn't this check's
+    concern -- it should already be failing elsewhere (ship gates,
+    degeneracy) for a more direct reason, so this reports ok=True with an
+    explanatory reason rather than double-penalizing it.
+
+    `min_paired_bars` guards against drawing a real/inverted-edge
+    conclusion from a handful of coincidentally-aligned bars -- mirrors
+    `check_model_degeneracy`'s `min_fired_count` guard for the same
+    thin-sample-looks-like-a-verdict failure mode.
+    """
+    triples = [
+        (a, b, c)
+        for a, b, c in zip(payoff_at_fire, payoff_delay_1, payoff_delay_2)
+        if a is not None and b is not None and c is not None
+    ]
+    n = len(triples)
+    if n < min_paired_bars:
+        reason = (
+            f"only {n} bars have all three (fire/+1/+2) payoffs available, need "
+            f">= {min_paired_bars} to draw any conclusion -- this is a thin-sample "
+            f"non-result, not evidence either way."
+        )
+        result = RepricingWallReport(ok=False, n_paired_bars=n, reason=reason)
+        if raise_on_fail:
+            raise RepricingWallFailure(reason)
+        return result
+
+    at_fire = [t[0] for t in triples]
+    delay_1 = [t[1] for t in triples]
+    delay_2 = [t[2] for t in triples]
+    mean_fire = sum(at_fire) / n
+    mean_d1 = sum(delay_1) / n
+    mean_d2 = sum(delay_2) / n
+
+    p_d1: Optional[float] = None
+    p_d2: Optional[float] = None
+    try:
+        from scipy.stats import wilcoxon
+
+        if any(a != b for a, b in zip(at_fire, delay_1)):
+            p_d1 = float(wilcoxon(at_fire, delay_1).pvalue)
+        if any(a != c for a, c in zip(at_fire, delay_2)):
+            p_d2 = float(wilcoxon(at_fire, delay_2).pvalue)
+    except ImportError:
+        pass  # significance test is supporting evidence only; the mean-collapse gate below is the real gate
+
+    if mean_fire <= 0:
+        reason = (
+            f"mean payoff at fire-time is already <= 0 ({mean_fire:.4f}) -- no positive "
+            f"edge here to test for repricing-wall collapse; this candidate should be "
+            f"failing on other grounds (ship gates / degeneracy), not this check."
+        )
+        return RepricingWallReport(
+            ok=True, n_paired_bars=n, mean_payoff_at_fire=mean_fire,
+            mean_payoff_delay_1=mean_d1, mean_payoff_delay_2=mean_d2,
+            wilcoxon_p_delay_1=p_d1, wilcoxon_p_delay_2=p_d2, reason=reason,
+        )
+
+    collapsed = mean_d1 <= 0 or mean_d2 <= 0
+    ok = not collapsed
+    reason = "" if ok else (
+        f"edge at fire-time (mean={mean_fire:.4f} over {n} bars) collapses to "
+        f"mean={mean_d1:.4f} at +1 bar / mean={mean_d2:.4f} at +2 bars -- this is exactly "
+        f"the repricing-wall pattern that sank three prior straddle/vertical experiments "
+        f"(MODEL_REBUILD_SPEC_2026-07-11.md Amendment 3/4, ENTRY_MODEL_RARELABEL_REBUILD_2026-07-12.md): "
+        f"the apparent edge only exists at the exact instant of peak model confidence, which "
+        f"means it's very likely measuring the chain's own repricing of the same signal, not "
+        f"a tradeable edge. Do not ship this candidate on the strength of its fire-time number alone."
+    )
+    result = RepricingWallReport(
+        ok=ok, n_paired_bars=n, mean_payoff_at_fire=mean_fire,
+        mean_payoff_delay_1=mean_d1, mean_payoff_delay_2=mean_d2,
+        wilcoxon_p_delay_1=p_d1, wilcoxon_p_delay_2=p_d2, reason=reason,
+    )
+    if not ok and raise_on_fail:
+        raise RepricingWallFailure(reason)
     return result

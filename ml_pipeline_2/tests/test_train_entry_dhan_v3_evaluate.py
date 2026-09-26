@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ml_pipeline_2.scripts.train_entry_dhan_v3 import DEFAULT_SEPARATION_THRESHOLDS, evaluate
+from ml_pipeline_2.scripts.train_entry_dhan_v3 import (
+    DEFAULT_SEPARATION_THRESHOLDS,
+    compute_ship_gates,
+    evaluate,
+)
 
 
 class _FakeModel:
@@ -61,3 +65,47 @@ class TestEvaluateThresholdGrid:
         assert row_085["fire_rate"] == pytest.approx(4 / 12, abs=1e-3)
         assert row_085["precision_fired"] > row_070["precision_fired"]
         assert row_085["precision_fired"] == pytest.approx(1.0)
+
+
+class TestComputeShipGates:
+    """2026-09-26: extracted from main()'s inline dict and standardized on
+    docs/MODEL_STUDY_CHECKLIST.md's bar (auc>=0.70, separation>=0.15,
+    ece<=0.05, prob_spread>=0.20) -- the previous inline gates
+    (auc>=0.62, separation>=0.08, no ece check) are exactly what let
+    nifty_entry_010pct_v1.joblib (holdout AUC 0.667) ship over its own
+    AUC-0.7327 sibling."""
+
+    _GOOD_SEPARATION_TABLE = [{"thr": 0.5, "separation": 0.20, "degenerate": False}]
+
+    def test_all_pass_when_every_metric_clears_the_checklist_bar(self) -> None:
+        gates = compute_ship_gates(
+            auc=0.75, ece=0.03, separation_table=self._GOOD_SEPARATION_TABLE, prob_spread=0.25,
+        )
+        assert all(gates.values())
+
+    def test_the_actual_010pct_v1_auc_would_now_fail(self) -> None:
+        # The real deployed bundle's holdout AUC -- would have shipped under
+        # the old auc>=0.62 gate, must fail under the new auc>=0.70 one.
+        gates = compute_ship_gates(
+            auc=0.667, ece=0.03, separation_table=self._GOOD_SEPARATION_TABLE, prob_spread=0.25,
+        )
+        assert gates["auc>=0.7"] is False
+        assert not all(gates.values())
+
+    def test_missing_ece_fails_rather_than_silently_passing(self) -> None:
+        gates = compute_ship_gates(
+            auc=0.80, ece=None, separation_table=self._GOOD_SEPARATION_TABLE, prob_spread=0.25,
+        )
+        assert gates["ece<=0.05"] is False
+
+    def test_degenerate_rows_are_excluded_from_the_separation_check(self) -> None:
+        table = [{"thr": 0.5, "separation": 0.99, "degenerate": True}]
+        gates = compute_ship_gates(auc=0.80, ece=0.02, separation_table=table, prob_spread=0.25)
+        assert gates["separation>=0.15"] is False
+
+    def test_thresholds_are_overridable(self) -> None:
+        gates = compute_ship_gates(
+            auc=0.65, ece=0.03, separation_table=self._GOOD_SEPARATION_TABLE, prob_spread=0.25,
+            auc_min=0.60,
+        )
+        assert gates["auc>=0.6"] is True

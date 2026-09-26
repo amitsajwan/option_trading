@@ -407,6 +407,48 @@ def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
             "reliability_table": reliability, "separation_table": sep}
 
 
+# 2026-09-26: standardized on docs/MODEL_STUDY_CHECKLIST.md's documented bar
+# (auc>=0.70, separation>=0.15, ece<=0.05, prob_spread>=0.20) -- this
+# script's own inline gates had drifted looser (auc>=0.62, separation>=0.08,
+# no ece check at all), which is exactly what let nifty_entry_010pct_v1.joblib
+# (holdout AUC 0.667) ship over its own AUC-0.7327 sibling
+# (nifty_entry_015pct_v2.joblib). Extracted to its own function so the
+# thresholds are unit-testable rather than only exercised by a full training
+# run.
+SHIP_GATE_AUC_MIN = 0.70
+SHIP_GATE_SEPARATION_MIN = 0.15
+SHIP_GATE_ECE_MAX = 0.05
+SHIP_GATE_PROB_SPREAD_MIN = 0.20
+
+
+def compute_ship_gates(
+    *,
+    auc: float,
+    ece: Optional[float],
+    separation_table: List[Dict[str, Any]],
+    prob_spread: float,
+    auc_min: float = SHIP_GATE_AUC_MIN,
+    separation_min: float = SHIP_GATE_SEPARATION_MIN,
+    ece_max: float = SHIP_GATE_ECE_MAX,
+    prob_spread_min: float = SHIP_GATE_PROB_SPREAD_MIN,
+) -> Dict[str, bool]:
+    """The ship/no-ship gate every trained bundle must clear before it's a
+    ready candidate. `ece=None` (an older evaluate() call site that never
+    computed it) fails this gate rather than silently passing it -- a
+    missing measurement is not the same as a good one.
+    """
+    return {
+        f"auc>={auc_min}": auc >= auc_min,
+        f"separation>={separation_min}": any(
+            (r.get("separation") or 0) >= separation_min
+            for r in separation_table
+            if not r.get("degenerate")
+        ),
+        f"ece<={ece_max}": ece is not None and ece <= ece_max,
+        f"prob_spread>={prob_spread_min}": prob_spread >= prob_spread_min,
+    }
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main(argv: List[str] | None = None) -> int:
@@ -540,16 +582,14 @@ def main(argv: List[str] | None = None) -> int:
     holdout_eval = evaluate(cal, X_hold, y_hold, "holdout")
 
     # Ship gate
-    auc = holdout_eval["roc_auc"]
-    gates = {
-        "auc>=0.62":        auc >= 0.62,
-        "separation>=0.08": any((r.get("separation") or 0) >= 0.08
-                                for r in holdout_eval["separation_table"]
-                                if not r.get("degenerate")),
-        "prob_spread>=0.20": True,  # checked below
-    }
     p = cal.predict_proba(X_hold)[:, 1]
-    gates["prob_spread>=0.20"] = bool(float(p.max()) - float(p.min()) >= 0.20)
+    prob_spread = float(p.max()) - float(p.min())
+    gates = compute_ship_gates(
+        auc=holdout_eval["roc_auc"],
+        ece=holdout_eval.get("ece"),
+        separation_table=holdout_eval["separation_table"],
+        prob_spread=prob_spread,
+    )
     all_pass = all(gates.values())
     log.info("Ship gates: %s — %s", gates, "ALL_PASS" if all_pass else "FAIL")
 

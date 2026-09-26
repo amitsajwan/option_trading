@@ -9,7 +9,9 @@ from ml_pipeline_2.pipeline.validation import (
     BacktestWindowContaminated,
     ModelDegenerate,
     ParquetInstrumentMismatch,
+    RepricingWallFailure,
     check_model_degeneracy,
+    check_repricing_wall,
     validate_backtest_window,
     validate_parquet_instrument,
 )
@@ -217,3 +219,71 @@ class TestValidateParquetInstrument:
         )
         assert not result.ok
         assert "NIFTYFUT" in result.reason
+
+
+class TestCheckRepricingWall:
+    def test_edge_that_survives_delay_passes(self) -> None:
+        # Positive at fire, still positive (even if smaller) at +1/+2.
+        at_fire = [0.05] * 30
+        delay_1 = [0.03] * 30
+        delay_2 = [0.02] * 30
+        result = check_repricing_wall(payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2)
+        assert result.ok
+        assert result.mean_payoff_at_fire == pytest.approx(0.05)
+
+    def test_edge_that_inverts_by_delay_1_fails(self) -> None:
+        # Exactly the pattern that sank the three prior straddle/vertical
+        # experiments: looks great at fire-time, negative one bar later.
+        at_fire = [0.05] * 30
+        delay_1 = [-0.02] * 30
+        delay_2 = [-0.03] * 30
+        with pytest.raises(RepricingWallFailure, match="repricing-wall"):
+            check_repricing_wall(payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2)
+
+    def test_edge_that_collapses_to_exactly_zero_fails(self) -> None:
+        at_fire = [0.05] * 30
+        delay_1 = [0.0] * 30
+        delay_2 = [0.01] * 30
+        result = check_repricing_wall(
+            payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2, raise_on_fail=False,
+        )
+        assert not result.ok
+
+    def test_no_edge_at_fire_time_passes_this_check_with_explanation(self) -> None:
+        # Not this check's job to fail an already-losing candidate a second
+        # time -- ship gates / degeneracy already cover that.
+        at_fire = [-0.01] * 25
+        delay_1 = [-0.05] * 25
+        delay_2 = [-0.08] * 25
+        result = check_repricing_wall(payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2)
+        assert result.ok
+        assert "no positive edge" in result.reason
+
+    def test_none_values_are_dropped_not_imputed(self) -> None:
+        at_fire = [0.05, None, 0.06] * 10
+        delay_1 = [0.04, 0.04, None] * 10
+        delay_2 = [0.03, 0.03, 0.03] * 10
+        # Only the (0.05, 0.04, 0.03) triples align across all three -- 10 of
+        # them -- below the default min_paired_bars, so lower it here since
+        # this test is about the pairing logic, not the sample-size gate.
+        result = check_repricing_wall(
+            payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2, min_paired_bars=5,
+        )
+        assert result.n_paired_bars == 10
+
+    def test_thin_sample_fails_regardless_of_direction(self) -> None:
+        at_fire = [0.05] * 5
+        delay_1 = [0.05] * 5
+        delay_2 = [0.05] * 5
+        with pytest.raises(RepricingWallFailure, match="thin-sample"):
+            check_repricing_wall(payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2, min_paired_bars=20)
+
+    def test_non_raising_mode_returns_a_result_instead(self) -> None:
+        at_fire = [0.05] * 30
+        delay_1 = [-0.02] * 30
+        delay_2 = [-0.03] * 30
+        result = check_repricing_wall(
+            payoff_at_fire=at_fire, payoff_delay_1=delay_1, payoff_delay_2=delay_2, raise_on_fail=False,
+        )
+        assert not result.ok
+        assert "repricing-wall" in result.reason
