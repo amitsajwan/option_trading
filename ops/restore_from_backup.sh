@@ -90,11 +90,21 @@ fi
 if [ -z "$services" ]; then
   log "    no manifest in backup -- bringing up the full default set"
 fi
-# Build EVERY image, not just $services: suffixed services (seller_app_sensex,
-# execution_app_nifty, ...) have no build: of their own and reuse the image of
-# their base service, which may itself be absent from the manifest (the
-# BankNifty seller was stopped at closure). Building never starts a container.
-$COMPOSE build
+# Build the manifest's services PLUS each one's base service: suffixed services
+# (seller_app_sensex, execution_app_nifty, ...) have no build: of their own and
+# reuse the base service's image, and the base may be absent from the manifest
+# (the BankNifty seller was stopped at closure). Naming services explicitly also
+# covers profile-gated ones (execution_app is profile "live"), which a bare
+# `compose build` silently skips -- found by the 2026-09-29 fresh-VM test.
+# Same rule as ops/deploy.sh. Building never starts a container.
+build_set=""
+for svc in $services; do
+  for b in "$svc" "$(echo "$svc" | sed -E 's/_(nifty|finnifty|sensex|midcpnifty)$//')"; do
+    case " $build_set " in *" $b "*) ;; *) build_set="$build_set $b";; esac
+  done
+done
+# shellcheck disable=SC2086
+$COMPOSE build $build_set
 # shellcheck disable=SC2086
 $COMPOSE up -d --no-deps $services
 

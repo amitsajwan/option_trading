@@ -90,11 +90,11 @@ done
 
 log "uploading the backup (~5 GB; this is the slow step)"
 g compute ssh "$VM" --zone="$ZONE" --command="mkdir -p ~/backup"
-g compute scp --recurse "$BACKUP"/* "$VM:~/backup/" --zone="$ZONE"
-g compute scp ops/restore_from_backup.sh "$VM:~/restore_from_backup.sh" --zone="$ZONE"
+g compute scp --recurse "$BACKUP"/* "$VM:backup/" --zone="$ZONE"
+g compute scp ops/restore_from_backup.sh "$VM:restore_from_backup.sh" --zone="$ZONE"
 TOTP_ARG=""
 if [ -n "$TOTP" ]; then
-  g compute scp "$TOTP" "$VM:~/new.env.totp" --zone="$ZONE"
+  g compute scp "$TOTP" "$VM:new.env.totp" --zone="$ZONE"
   TOTP_ARG="\$HOME/new.env.totp"
 fi
 
