@@ -25,7 +25,7 @@ restore. **Every instrument comes back halted.** Nothing trades until you remove
 | What | Where |
 |---|---|
 | Code | GitHub `amitsajwan/option_trading`, branch `feat/dhan-feature-engine` (all commits pushed) |
-| GCP | project `trader-502012`: VMs, disks, static IP, buckets and firewall rule **deleted**. The empty project and its two API keys remain (no cost). |
+| GCP | project `trader-502012`: VMs, disks, static IP, buckets and firewall rule **deleted**. The empty project remains (no cost); its API keys were deleted. |
 | Backup (the ONLY copy of the data) | laptop `C:\code\option_trading\gcp_backup_2026-09-29\` (5.1 GB). **Copy it to a second place** (external drive or cloud drive). |
 | Broker | Dhan account **closed**. The old credentials are dead, so a new account is needed. |
 | Trading | every buyer and seller halted (`operator_halt` files); zero open positions at close |
@@ -192,7 +192,8 @@ strategy side, but the data services still need a market-data source.
 
 ## GCP leftovers
 
-The empty project `trader-502012` still exists, with default firewall rules and two
-API keys ("Gemini API Key", "event-calendar-llm"). None of these cost anything. To
+The empty project `trader-502012` still exists, with only its default firewall rules.
+Its two API keys were deleted and the Gemini API disabled on 2026-09-29. Nothing in it
+costs anything. To
 remove the project entirely: `gcloud projects delete trader-502012` (recoverable for
 30 days).
