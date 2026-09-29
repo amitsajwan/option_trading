@@ -67,6 +67,12 @@ bash ops/resume.sh --totp path/to/.env.totp
   tells you to re-run with valid credentials.
 - On success it prints the dashboard URL: `http://8.231.101.82:8008`.
 
+**Tested at closure (2026-09-29), on the real VM:** park took about 1 minute and
+resume about 3.5 minutes. Resume brought back 45/45 containers, minted a token,
+re-enabled the 6 timers and passed the config contract. Resume with dead
+credentials exited 2, with 28 data containers up, broker services stopped and
+timers off, as described above.
+
 What runs on the VM is `ops/vm_lifecycle.sh thaw`. The same script does `freeze`
 (parking) and `status`:
 
@@ -188,8 +194,8 @@ strategy side, but the data services still need a market-data source.
 
 - The dead-code checker `ml_pipeline_2/tests/test_boundaries.py` fails (pre-existing and
   harmless; its substring match flags the package's own imports).
-- `strategy_persistence_app_nifty` and `strategy_persistence_app_sensex` showed as
-  unhealthy before closure (pre-existing).
+- `strategy_persistence_app_nifty`, `_sensex` and `_midcpnifty` report unhealthy
+  (pre-existing; they come back the same way after every resume).
 - The composite direction resolver's `vix_chg` signal never fires. Its threshold expects
   VIX points, but the field is a fraction.
 
