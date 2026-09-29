@@ -2,9 +2,11 @@
 """Headless Dhan token refresh via TOTP (stdlib only — no pip deps on the host).
 
 Reads DHAN_CLIENT_ID/DHAN_PIN/DHAN_TOTP_SECRET from /opt/option_trading/.env.totp,
-generates a fresh 24h access token, and writes DHAN_ACCESS_TOKEN into
-/opt/option_trading/.env.compose. Robust: regenerates from cold (no dependency on
-a prior valid token). Never prints secrets or the token.
+generates a fresh 24h access token, and writes BOTH DHAN_CLIENT_ID and
+DHAN_ACCESS_TOKEN into /opt/option_trading/.env.compose. .env.totp is the single
+source of truth for which account the stack uses, so switching accounts means only
+replacing .env.totp (docs/RESUME.md). Robust: regenerates from cold (no dependency
+on a prior valid token). Never prints secrets or the token.
 """
 import base64, hashlib, hmac, json, os, re, struct, sys, time, urllib.parse, urllib.request
 
@@ -24,6 +26,18 @@ def _read_env(path):
     return d
 
 
+def set_env_keys(text, updates):
+    """Set KEY=value lines in env-file text: replace in place if present,
+    append otherwise. Every other line (comments, stray bytes) is untouched."""
+    for key, value in updates.items():
+        pattern = r"^" + re.escape(key) + r"=.*$"
+        if re.search(pattern, text, re.M):
+            text = re.sub(pattern, lambda _m: key + "=" + value, text, flags=re.M)
+        else:
+            text = text.rstrip("\n") + "\n" + key + "=" + value + "\n"
+    return text
+
+
 def _totp(secret):
     pad = "=" * ((8 - len(secret) % 8) % 8)
     key = base64.b32decode(secret.strip().upper() + pad)
@@ -35,11 +49,13 @@ def _totp(secret):
 
 def main():
     t = _read_env(ENVTOTP)
-    cid = t.get("DHAN_CLIENT_ID") or "1111957145"
+    # No fallback client ID: a hardcoded default here silently authenticated as
+    # the original account (closed 2026-09) whenever .env.totp omitted it.
+    cid = t.get("DHAN_CLIENT_ID")
     pin = t.get("DHAN_PIN")
     secret = t.get("DHAN_TOTP_SECRET")
-    if not pin or not secret:
-        print("FAILED: DHAN_PIN / DHAN_TOTP_SECRET missing in .env.totp")
+    if not cid or not pin or not secret:
+        print("FAILED: DHAN_CLIENT_ID / DHAN_PIN / DHAN_TOTP_SECRET missing in .env.totp")
         return 1
 
     # Dhan expects the params as QUERY STRING on a POST (not a JSON body).
@@ -72,10 +88,9 @@ def main():
     # unchanged, so a rogue byte in an unrelated comment can never crash this
     # script again, and we don't silently mangle whatever the byte was.
     s = open(ENVC, encoding="utf-8", errors="surrogateescape").read()
-    if re.search(r"^DHAN_ACCESS_TOKEN=", s, re.M):
-        s = re.sub(r"^DHAN_ACCESS_TOKEN=.*$", "DHAN_ACCESS_TOKEN=" + tok, s, flags=re.M)
-    else:
-        s = s.rstrip("\n") + "\nDHAN_ACCESS_TOKEN=" + tok + "\n"
+    # Client ID written with the token: containers read DHAN_CLIENT_ID from
+    # .env.compose, so a new account's token paired with the old ID fails auth.
+    s = set_env_keys(s, {"DHAN_CLIENT_ID": cid, "DHAN_ACCESS_TOKEN": tok})
     open(ENVC, "w", encoding="utf-8", errors="surrogateescape").write(s)
     print(f"OK: fresh Dhan token minted via TOTP and written to .env.compose (len={len(tok)})")
     return 0
