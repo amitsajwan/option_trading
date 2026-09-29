@@ -1,19 +1,22 @@
-# Resuming the trading stack
+# Bringing the trading stack back
 
-The stack was parked on **2026-09-29** when the Dhan account was closed. This page is
-everything needed to bring it back.
+The stack was shut down on **2026-09-29** when the Dhan account was closed and all GCP
+resources were handed back. This page is everything needed to bring it back.
 
 ## TL;DR
 
+**All GCP resources were deleted on 2026-09-29.** Coming back means rebuilding
+from the laptop backup onto a new VM. That is one command, and it was tested end
+to end on a brand-new VM before anything was deleted:
+
 ```bash
-# from the repo root on your laptop (Git Bash), with gcloud logged in:
-bash ops/resume.sh --totp path/to/new/.env.totp
+# from the repo root on your laptop (Git Bash), gcloud installed and logged in:
+bash ops/rebuild_new_vm.sh --project <gcp-project> --totp path/to/new/.env.totp
 ```
 
-That one command starts the VM, installs the new broker credentials, restarts every
-service that was running at shutdown, mints a broker token, re-enables the scheduled
-jobs and runs the health checks. **Every instrument comes back halted.** Nothing trades
-until you remove an `operator_halt` yourself (see "Going live").
+It takes about 30 minutes: about 18 to upload the 5 GB backup and about 15 for the
+restore. **Every instrument comes back halted.** Nothing trades until you remove an
+`operator_halt` yourself (see "Going live").
 
 ---
 
@@ -22,21 +25,23 @@ until you remove an `operator_halt` yourself (see "Going live").
 | What | Where |
 |---|---|
 | Code | GitHub `amitsajwan/option_trading`, branch `feat/dhan-feature-engine` (all commits pushed) |
-| VM | GCP project `trader-502012`, VM `trader-runtime-01` (e2-standard-4, zone `asia-south1-b`), **stopped, not deleted** |
-| Public IP | reserved static `trader-runtime-ip` = `8.231.101.82` (kept while stopped) |
-| Data + credentials | on the VM's disk, unchanged (Mongo, parquet, `.run/`, models, `.env.compose`, `.env.totp`) |
-| Offline backup | laptop `C:\code\option_trading\gcp_backup_2026-09-29\`, also on the VM at `/var/backups/option_trading_closure_2026-09-29/` |
+| GCP | project `trader-502012`: VMs, disks, static IP, buckets and firewall rule **deleted**. The empty project and its two API keys remain (no cost). |
+| Backup (the ONLY copy of the data) | laptop `C:\code\option_trading\gcp_backup_2026-09-29\` (5.1 GB). **Copy it to a second place** (external drive or cloud drive). |
 | Broker | Dhan account **closed**. The old credentials are dead, so a new account is needed. |
 | Trading | every buyer and seller halted (`operator_halt` files); zero open positions at close |
 
-Parking cost is only the stopped VM's disk plus the reserved IP (a few dollars a month;
-check GCP billing). To stop even that, see "Tearing down completely".
-
 ---
 
-## Path A: resume (the VM still exists)
+## Step by step: coming back
 
-### 1. Get broker credentials
+### 1. Prerequisites
+
+- A GCP project with billing enabled. The old `trader-502012` can be reused, or
+  create a new one: `gcloud projects create <id>` and link billing in the console.
+- `gcloud auth login` on the laptop (Git Bash), and the repo cloned locally.
+- The backup directory (above) on the laptop.
+
+### 2. Broker credentials
 
 For a new Dhan account, create `.env.totp` with exactly these three lines (enable TOTP
 in the Dhan web console to get the secret):
@@ -49,41 +54,49 @@ DHAN_TOTP_SECRET=<base32 TOTP secret>
 
 Keep this file outside the repo. It is the single source of truth for which account
 the stack uses. The token refresh writes both the client ID and a fresh access token
-into `.env.compose` from it, so nothing else needs editing.
+into `.env.compose` from it.
 
-In the Dhan console, **whitelist the static IP `8.231.101.82`**. Dhan's order APIs
-reject calls from non-whitelisted IPs.
-
-### 2. Run it
+### 3. Rebuild
 
 ```bash
-bash ops/resume.sh --totp path/to/.env.totp
+bash ops/rebuild_new_vm.sh --project <gcp-project> --totp path/to/.env.totp
+# optional: --zone asia-south1-b --vm trader-runtime-01 --machine e2-standard-4 --disk 80
 ```
 
-- Without `--totp`, it reuses whatever `.env.totp` is already on the VM.
-- If the broker rejects the credentials, the script still brings Mongo, the dashboard
-  and the data services up, then stops the broker-connected services and leaves the
-  scheduled jobs off, so nothing crash-loops or spams alerts. It exits with code 2 and
-  tells you to re-run with valid credentials.
-- On success it prints the dashboard URL: `http://8.231.101.82:8008`.
+It checks the backup's checksums, enables Compute, creates the dashboard firewall
+rule, reserves a static IP (`<vm>-ip`) and creates an Ubuntu 22.04 VM. It then uploads
+the backup and runs `ops/restore_from_backup.sh` on the VM, which:
 
-**Tested at closure (2026-09-29), on the real VM:** park took about 1 minute and
-resume about 3.5 minutes. Resume brought back 45/45 containers, minted a token,
-re-enabled the 6 timers and passed the config contract. Resume with dead
-credentials exited 2, with 28 data containers up, broker services stopped and
-timers off, as described above.
+- installs Docker and clones the repo at the backup's `COMMIT`;
+- restores secrets, models, `.run/`, parquet, the seller volumes and Mongo (897,791 documents);
+- **halts everything**;
+- builds the images and starts the 45 services that were running at closure;
+- mints a broker token and installs the 6 scheduled jobs.
 
-What runs on the VM is `ops/vm_lifecycle.sh thaw`. The same script does `freeze`
-(parking) and `status`:
+It ends by printing the dashboard URL.
 
-```bash
-gcloud compute ssh trader-runtime-01 --zone=asia-south1-b --project=trader-502012 \
-  --command="cd /opt/option_trading && sudo bash ops/vm_lifecycle.sh status"
-```
+- **Without `--totp`**, or if the broker rejects the credentials, the data and dashboard
+  come up but the broker-connected services are stopped and no timers are installed.
+  It exits with code 2 and prints the fix.
+- **Then whitelist the VM's new static IP** in the broker console. Order APIs reject
+  calls from non-whitelisted IPs.
 
-### 3. Going live (deliberate, per instrument)
+### 4. Check before trading
 
-Resume never enables trading. To let one instrument trade, check its config first, then
+- **Futures contract symbols in `.env.compose` will have expired** (for example
+  `SENSEX26AUGFUT`). Roll them to the current month for each instrument, then
+  recreate the affected services with `ops/deploy.sh`.
+- Models are trained on data up to September 2026. Treat them as stale.
+- Verify:
+
+  ```bash
+  gcloud compute ssh trader-runtime-01 --zone=asia-south1-b --project=<p> \
+    --command="cd /opt/option_trading && sudo bash ops/vm_lifecycle.sh status"
+  ```
+
+### 5. Going live (deliberate, per instrument)
+
+Rebuild never enables trading. To let one instrument trade, check its config first, then
 remove its halt:
 
 ```bash
@@ -95,70 +108,48 @@ sudo docker exec option_trading-seller_app_sensex-1 rm -f /seller_run/operator_h
 
 `docs/EMERGENCY_STOP.md` has the halt and resume details. Real-money execution also needs
 the instrument's `*_EXECUTION_ADAPTER=dhan` (and, for sellers, `*_SELLER_LIVE_ENABLED=1`)
-in `.env.compose`.
+in `.env.compose`. **Read "Research status" below first.** No strategy in this repo has
+a demonstrated profitable edge.
 
-**Read "Research status" below before going live.** No strategy in this repo has a
-demonstrated profitable edge.
+### Deploying code, parking, resuming (once rebuilt)
 
-### 4. Deploying new code after resume
+- **Deploy:** commit locally, move the code with a git bundle and run `sudo bash ops/deploy.sh <services>`
+  on the VM (the VM has no GitHub credentials; its `origin` is `/tmp/repo.bundle`).
+- **Park cheaply:** `bash ops/shutdown.sh` (freeze, then stop the VM; the disk and IP are kept).
+- **Resume from parked:** `bash ops/resume.sh [--totp file]` (about 3.5 minutes).
+- If the project, zone or VM name differ from the defaults, set `PROJECT`, `ZONE` and
+  `VM` in the environment for both scripts.
 
-This is unchanged. Commit locally, move the code with a git bundle, and deploy with
-`ops/deploy.sh`. The VM has no GitHub credentials, so its `origin` remote is a bundle
-file:
+### Test record (2026-09-29)
 
-```bash
-git bundle create /tmp/repo.bundle feat/dhan-feature-engine
-gcloud compute scp /tmp/repo.bundle trader-runtime-01:/tmp/repo.bundle --zone=asia-south1-b --project=trader-502012
-gcloud compute ssh trader-runtime-01 --zone=asia-south1-b --project=trader-502012 \
-  --command="cd /opt/option_trading && sudo bash ops/deploy.sh <services...>"
-```
+- **Park and resume** on the real VM: park took about 1 minute and resume about
+  3.5 minutes. Resume brought back 45/45 containers, minted a token, re-enabled the
+  6 timers and passed the config contract.
+- **Resume with dead credentials:** exited 2 cleanly, with broker services off and timers off.
+- **Full rebuild onto a brand-new VM from the laptop backup:**
+  - 45/45 containers running, 6 timers, config contract PASS, all halts present;
+  - Mongo counts matched live;
+  - snapshots published for all 5 instruments, and the dashboard returned 200.
+- **Three bugs the rebuild test found, all fixed:**
+  - Windows `pscp` does not expand `~` in remote paths;
+  - a plain `compose build` skipped the profile-gated `execution_app`;
+  - `compose up` aborted on health checks while the token was stale.
 
-### Parking again
-
-```bash
-bash ops/shutdown.sh            # freeze + stop VM
-bash ops/shutdown.sh --keep-vm  # freeze services only
-```
-
----
-
-## Path B: disaster rebuild (the VM or GCP project is gone)
-
-Use the offline backup on the laptop: `C:\code\option_trading\gcp_backup_2026-09-29\`.
+### Backup contents
 
 | File | Contents |
 |---|---|
-| `mongo_trading_ai.archive.gz` | `mongodump` of the whole `trading_ai` DB (1.2 GB), including all historical market snapshots, which **cannot be re-downloaded** once the broker account is closed |
-| `parquet.tar` | `.data/ml_pipeline/` (per-instrument snapshot parquet, 3.2 GB; rebuildable from Mongo, but slow) |
+| `mongo_trading_ai.archive.gz` | `mongodump` of the whole `trading_ai` DB (1.2 GB), including historical market snapshots that **cannot be re-downloaded** |
+| `parquet.tar` | `.data/ml_pipeline/` (per-instrument snapshot parquet, 3.2 GB) |
 | `run.tar.gz` | `.run/` (canonical JSONL trade and decision logs, training views, halt files) |
 | `models.tar.gz` | `models/` (including research models not in git) |
 | `secrets.tar.gz` | `.env.compose`, `.env.totp` (the Dhan ones are now dead) |
 | `vol_option_trading_seller_*.tar.gz` | seller Docker volumes (seller state and halts) |
-| `SHA256SUMS`, `COMMIT` | checksums; the exact commit the backup matches |
+| `lifecycle/` | the services and timers running at closure (what the rebuild starts) |
+| `research_scripts_uncommitted.tar.gz` | 13 ad-hoc research scripts that were never committed |
+| `SHA256SUMS`, `COMMIT` | checksums, and the commit the rebuild checks out |
 
-**Verified at closure:** all checksums match; every archive is readable; the Mongo
-gzip stream passes its CRC check; a real restore of one collection into a scratch
-database returned 1,668 of 1,668 documents, matching live.
-
-Rebuild on any fresh Ubuntu VM (8+ GB RAM, 80+ GB disk):
-
-```bash
-# copy the backup dir to the VM, then:
-curl -fsSLO https://raw.githubusercontent.com/amitsajwan/option_trading/feat/dhan-feature-engine/ops/restore_from_backup.sh
-sudo bash restore_from_backup.sh ~/gcp_backup_2026-09-29
-```
-
-The script verifies checksums, installs Docker, clones the repo at the backed-up
-commit, restores the files, volumes and Mongo, **halts everything**, builds and starts
-the services, mints a token and installs the scheduled jobs.
-
-**It has never been run end-to-end on a fresh VM.** Every step is scripted, and each is
-a routine command. Watch the first run. Also:
-
-- The new VM has a new IP. Whitelist it with the broker.
-- If the repo has become private, clone with credentials first.
-- Skip `vol_option_trading_mongo_data` if you ever produce one. Mongo is restored from
-  the `mongodump`, never from a raw copy of its data directory.
+Mongo is restored only from the `mongodump`, never from a raw copy of its data directory.
 
 ---
 
@@ -195,18 +186,13 @@ strategy side, but the data services still need a market-data source.
 - The dead-code checker `ml_pipeline_2/tests/test_boundaries.py` fails (pre-existing and
   harmless; its substring match flags the package's own imports).
 - `strategy_persistence_app_nifty`, `_sensex` and `_midcpnifty` report unhealthy
-  (pre-existing; they come back the same way after every resume).
+  (pre-existing; they come back the same way after every resume and rebuild).
 - The composite direction resolver's `vix_chg` signal never fires. Its threshold expects
   VIX points, but the field is a fraction.
 
-## Tearing down completely
+## GCP leftovers
 
-This is irreversible for anything not in the laptop backup: the VM, its disk and the
-reserved IP.
-
-```bash
-gcloud compute instances delete trader-runtime-01 --zone=asia-south1-b --project=trader-502012
-gcloud compute addresses delete trader-runtime-ip --region=asia-south1 --project=trader-502012
-```
-
-After this, only Path B can bring the stack back.
+The empty project `trader-502012` still exists, with default firewall rules and two
+API keys ("Gemini API Key", "event-calendar-llm"). None of these cost anything. To
+remove the project entirely: `gcloud projects delete trader-502012` (recoverable for
+30 days).
