@@ -105,8 +105,22 @@ for svc in $services; do
 done
 # shellcheck disable=SC2086
 $COMPOSE build $build_set
+# Create, then start with plain `docker start` (like vm_lifecycle.sh thaw), NOT
+# `compose up`: up waits on depends_on health checks, and the backed-up broker
+# token is always stale by the time a restore runs, so snapshot_app stays
+# unhealthy until step 9 mints a fresh token -- up would abort half-way
+# (found by the 2026-09-29 fresh-VM test).
 # shellcheck disable=SC2086
-$COMPOSE up -d --no-deps $services
+$COMPOSE up --no-start --no-deps $services
+infra_re='^option_trading-(mongo|redis)-1$'
+docker start $(docker ps -a --format '{{.Names}}' | grep -E "$infra_re") >/dev/null
+sleep 10
+for c in $(docker ps -a --format '{{.Names}}' | grep '^option_trading-' | grep -vE "$infra_re"); do
+  if [ -z "$services" ] || grep -qx "$c" "$BK/lifecycle/containers.txt" 2>/dev/null; then
+    docker start "$c" >/dev/null || log "    WARN: $c did not start"
+  fi
+done
+sleep 20
 
 log "9/9 minting a broker token and installing the scheduled jobs"
 BROKER_OK=0
